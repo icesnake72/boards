@@ -1,0 +1,8 @@
+package com.example.board.global.exception;
+
+public class UnauthorizedException extends BusinessException {
+
+  public UnauthorizedException(ErrorCode errorCode) {
+    super(errorCode);
+  }
+}
