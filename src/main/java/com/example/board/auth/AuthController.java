@@ -42,6 +42,7 @@ public class AuthController {
   @PostMapping("/logout")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public void logout(HttpServletRequest request) {
+    // getSession(false): 있으면 가져오고, 없으면 새로 만들지 않는다.
     HttpSession session = request.getSession(false);
     if (session != null) {
       session.invalidate();
