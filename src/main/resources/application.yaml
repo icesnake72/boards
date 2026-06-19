@@ -25,3 +25,4 @@ jwt:
 logging:
   level:
     org.hibernate.SQL: debug
+    org.springframework.security.web.FilterChainProxy: DEBUG

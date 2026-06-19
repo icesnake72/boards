@@ -21,26 +21,29 @@ public class JwtTokenProvider {
   public JwtTokenProvider(
       @Value("${jwt.secret}") String base64Secret,
       @Value("${jwt.access-token-validity-seconds}") long accessTokenValiditySeconds) {
+    // Base64 시크릿을 바이트로 디코드해 HMAC 서명용 SecretKey 생성 (HS256, 최소 32바이트)
     this.key = Keys.hmacShaKeyFor(Decoders.BASE64.decode(base64Secret));
     this.accessTokenValiditySeconds = accessTokenValiditySeconds;
   }
 
+  // userId를 subject에 담고 만료시각을 정해 서명된 토큰 문자열을 발급한다
   public String createToken(Long userId) {
     Date now = new Date();
     Date expiration = new Date(now.getTime() + accessTokenValiditySeconds * 1000);
     return Jwts.builder()
-        .subject(String.valueOf(userId))
-        .issuedAt(now)
-        .expiration(expiration)
-        .signWith(key)
-        .compact();
+        .subject(String.valueOf(userId))   // sub 클레임 = userId
+        .issuedAt(now)                       // iat = 발급 시각
+        .expiration(expiration)              // exp = 만료 시각
+        .signWith(key)                       // 시크릿으로 서명 (위조 방지)
+        .compact();                          // 헤더.페이로드.서명 문자열로 직렬화
   }
 
+  // 토큰을 검증하며 파싱해 subject(userId)를 꺼낸다 (서명/만료 불량이면 예외)
   public Long getUserId(String token) {
     String subject = Jwts.parser()
-        .verifyWith(key)
+        .verifyWith(key)            // 서명 검증
         .build()
-        .parseSignedClaims(token)
+        .parseSignedClaims(token)   // 검증 실패·만료 시 예외 발생
         .getPayload()
         .getSubject();
     return Long.valueOf(subject);
