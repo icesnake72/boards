@@ -3,7 +3,6 @@ package com.example.board.auth;
 import com.example.board.global.exception.ErrorCode;
 import com.example.board.global.exception.UnauthorizedException;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpSession;
 import org.springframework.core.MethodParameter;
 import org.springframework.stereotype.Component;
 import org.springframework.web.bind.support.WebDataBinderFactory;
@@ -28,14 +27,13 @@ public class LoginUserIdArgumentResolver implements HandlerMethodArgumentResolve
       NativeWebRequest webRequest,
       WebDataBinderFactory binderFactory) {
     HttpServletRequest request = webRequest.getNativeRequest(HttpServletRequest.class);
-    // getSession(false): 세션이 없으면 새로 만들지 않는다.
-    HttpSession session = request != null ? request.getSession(false) : null;
+    // 강의 포인트: 단계 1은 세션에서 꺼냈지만, 단계 2는 JwtAuthenticationFilter가 토큰에서 꺼내
+    // request attribute에 심어둔 userId를 읽는다. 인증 방식이 바뀌어도 컨트롤러는 그대로다.
     Long loginUserId =
-        session != null ? (Long) session.getAttribute(SessionConst.LOGIN_USER_ID) : null;
+        request != null ? (Long) request.getAttribute(AuthConst.LOGIN_USER_ID) : null;
     if (loginUserId == null) {
       throw new UnauthorizedException(ErrorCode.LOGIN_REQUIRED);
     }
-    // 강의 포인트: 지금은 세션에서 꺼내지만, JWT 단계에서는 이 메서드 내부만 토큰 파싱으로 바꾸면 된다 — 컨트롤러는 그대로.
     return loginUserId;
   }
 }

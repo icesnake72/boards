@@ -2,6 +2,8 @@ package com.example.board.auth;
 
 import com.example.board.auth.dto.LoginRequest;
 import com.example.board.auth.dto.SignupRequest;
+import com.example.board.auth.dto.TokenResponse;
+import com.example.board.auth.jwt.JwtTokenProvider;
 import com.example.board.global.exception.DuplicateException;
 import com.example.board.global.exception.ErrorCode;
 import com.example.board.global.exception.UnauthorizedException;
@@ -12,6 +14,7 @@ import com.example.board.user.User;
 import com.example.board.user.UserRepository;
 import com.example.board.user.dto.UserResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,6 +26,10 @@ public class AuthService {
   private final UserRepository userRepository;
   private final UserProfileRepository userProfileRepository;
   private final PasswordEncoder passwordEncoder;
+  private final JwtTokenProvider tokenProvider;
+
+  @Value("${jwt.access-token-validity-seconds}")
+  private long accessTokenValiditySeconds;
 
   // User와 UserProfile을 한 트랜잭션으로 생성 — 하나라도 실패하면 모두 롤백
   @Transactional
@@ -49,14 +56,16 @@ public class AuthService {
 
   // username 미존재와 password 불일치를 같은 메시지(LOGIN_FAILED)로 응답한다
   // — 어떤 계정이 존재하는지 노출하지 않기 위함 (user enumeration 방지)
+  // 강의 포인트: 인증 성공 시 세션에 저장하지 않고, userId를 담은 JWT를 발급해 클라이언트에 돌려준다(stateless).
   @Transactional(readOnly = true)
-  public UserResponse login(LoginRequest request) {
+  public TokenResponse login(LoginRequest request) {
     User user = userRepository.findByUsername(request.username())
         .orElseThrow(() -> new UnauthorizedException(ErrorCode.LOGIN_FAILED));
 
     if (!passwordEncoder.matches(request.password(), user.getPassword())) {
       throw new UnauthorizedException(ErrorCode.LOGIN_FAILED);
     }
-    return UserResponse.from(user);
+    String accessToken = tokenProvider.createToken(user.getId());
+    return TokenResponse.bearer(accessToken, accessTokenValiditySeconds);
   }
 }

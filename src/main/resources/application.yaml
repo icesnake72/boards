@@ -18,6 +18,10 @@ spring:
       hibernate:
         format_sql: true
 
+jwt:
+  secret: ${JWT_SECRET:bG9jYWwtZGV2LWp3dC1zZWNyZXQta2V5LWZvci1ib2FyZC1sZWN0dXJlLTI1Ng==}  # Base64, 로컬 강의용 기본값 (HS256 최소 256비트)
+  access-token-validity-seconds: 3600  # 1시간
+
 logging:
   level:
     org.hibernate.SQL: debug

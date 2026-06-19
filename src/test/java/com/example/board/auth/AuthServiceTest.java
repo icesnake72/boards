@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.example.board.auth.dto.LoginRequest;
 import com.example.board.auth.dto.SignupRequest;
+import com.example.board.auth.dto.TokenResponse;
+import com.example.board.auth.jwt.JwtTokenProvider;
 import com.example.board.global.exception.DuplicateException;
 import com.example.board.global.exception.UnauthorizedException;
 import com.example.board.profile.UserProfileRepository;
@@ -14,7 +16,6 @@ import com.example.board.user.dto.UserResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,6 +34,9 @@ class AuthServiceTest {
 
   @Autowired
   PasswordEncoder passwordEncoder;
+
+  @Autowired
+  JwtTokenProvider tokenProvider;
 
   @Test
   void should_createUserAndProfile_whenSignup() {
@@ -76,16 +80,15 @@ class AuthServiceTest {
   }
 
   @Test
-  void should_storeUserIdInSession_whenLoginSucceeds() {
+  void should_issueValidJwt_whenLoginSucceeds() {
     UserResponse signedUp =
         authService.signup(new SignupRequest("tester1", "tester1@example.com", "password123", "테스터"));
-    AuthController controller = new AuthController(authService);
-    MockHttpSession session = new MockHttpSession();
 
-    UserResponse response = controller.login(new LoginRequest("tester1", "password123"), session);
+    TokenResponse response = authService.login(new LoginRequest("tester1", "password123"));
 
-    assertThat(response.id()).isEqualTo(signedUp.id());
-    assertThat(session.getAttribute(SessionConst.LOGIN_USER_ID)).isEqualTo(signedUp.id());
+    assertThat(response.accessToken()).isNotBlank();
+    assertThat(response.tokenType()).isEqualTo("Bearer");
+    assertThat(tokenProvider.getUserId(response.accessToken())).isEqualTo(signedUp.id());
   }
 
   @Test
