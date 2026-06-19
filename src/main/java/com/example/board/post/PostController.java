@@ -1,8 +1,6 @@
 package com.example.board.post;
 
-import com.example.board.auth.SessionConst;
-import com.example.board.global.exception.ErrorCode;
-import com.example.board.global.exception.UnauthorizedException;
+import com.example.board.auth.LoginUserId;
 import com.example.board.post.dto.PostCreateRequest;
 import com.example.board.post.dto.PostListResponse;
 import com.example.board.post.dto.PostResponse;
@@ -23,7 +21,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.bind.annotation.SessionAttribute;
 
 @RestController
 @RequestMapping("/api/v1")
@@ -40,14 +37,14 @@ public class PostController {
     return postService.getPosts(boardId, pageable);
   }
 
-  // 로그인 시 세션에 저장한 userId를 @SessionAttribute로 꺼내 작성자를 식별한다
+  // @LoginUserId가 로그인 사용자 id 주입과 비로그인 401 처리를 담당한다.
   @PostMapping("/boards/{boardId}/posts")
   @ResponseStatus(HttpStatus.CREATED)
   public PostResponse create(
       @PathVariable Long boardId,
-      @SessionAttribute(name = SessionConst.LOGIN_USER_ID, required = false) Long loginUserId,
+      @LoginUserId Long userId,
       @Valid @RequestBody PostCreateRequest request) {
-    return postService.create(boardId, requireLogin(loginUserId), request);
+    return postService.create(boardId, userId, request);
   }
 
   @GetMapping("/posts/{id}")
@@ -58,23 +55,16 @@ public class PostController {
   @PutMapping("/posts/{id}")
   public PostResponse update(
       @PathVariable Long id,
-      @SessionAttribute(name = SessionConst.LOGIN_USER_ID, required = false) Long loginUserId,
+      @LoginUserId Long userId,
       @Valid @RequestBody PostUpdateRequest request) {
-    return postService.update(id, requireLogin(loginUserId), request);
+    return postService.update(id, userId, request);
   }
 
   @DeleteMapping("/posts/{id}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public void delete(
       @PathVariable Long id,
-      @SessionAttribute(name = SessionConst.LOGIN_USER_ID, required = false) Long loginUserId) {
-    postService.delete(id, requireLogin(loginUserId));
-  }
-
-  private Long requireLogin(Long loginUserId) {
-    if (loginUserId == null) {
-      throw new UnauthorizedException(ErrorCode.LOGIN_REQUIRED);
-    }
-    return loginUserId;
+      @LoginUserId Long userId) {
+    postService.delete(id, userId);
   }
 }
