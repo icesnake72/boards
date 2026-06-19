@@ -3,9 +3,14 @@ package com.example.board.global.exception;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @Slf4j
 @RestControllerAdvice
@@ -28,6 +33,49 @@ public class GlobalExceptionHandler {
     log.warn("Validation failed: {}", errors);
     return ResponseEntity.status(ErrorCode.INVALID_INPUT.getStatus())
         .body(ErrorResponse.of(ErrorCode.INVALID_INPUT, errors));
+  }
+
+  // 깨지거나 비어 있는 JSON 본문 등으로 요청 본문을 역직렬화할 수 없을 때 발생
+  @ExceptionHandler(HttpMessageNotReadableException.class)
+  public ResponseEntity<ErrorResponse> handleMessageNotReadable(HttpMessageNotReadableException e) {
+    log.warn("Malformed request body: {}", e.getMessage());
+    return ResponseEntity.status(ErrorCode.MALFORMED_REQUEST.getStatus())
+        .body(ErrorResponse.of(ErrorCode.MALFORMED_REQUEST));
+  }
+
+  // 경로 변수/요청 파라미터의 타입이 맞지 않을 때 발생 (예: Long 자리에 "abc")
+  @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+  public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+    log.warn("Type mismatch: name={}, value={}", e.getName(), e.getValue());
+    return ResponseEntity.status(ErrorCode.TYPE_MISMATCH.getStatus())
+        .body(ErrorResponse.of(ErrorCode.TYPE_MISMATCH));
+  }
+
+  // 필수 쿼리 파라미터가 누락되었을 때 발생
+  @ExceptionHandler(MissingServletRequestParameterException.class)
+  public ResponseEntity<ErrorResponse> handleMissingParameter(
+      MissingServletRequestParameterException e) {
+    log.warn("Missing request parameter: {}", e.getParameterName());
+    return ResponseEntity.status(ErrorCode.MISSING_PARAMETER.getStatus())
+        .body(ErrorResponse.of(ErrorCode.MISSING_PARAMETER));
+  }
+
+  // 해당 경로가 지원하지 않는 HTTP 메서드로 호출되었을 때 발생 (예: POST 전용에 DELETE)
+  @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+  public ResponseEntity<ErrorResponse> handleMethodNotSupported(
+      HttpRequestMethodNotSupportedException e) {
+    log.warn("Method not supported: {}", e.getMethod());
+    return ResponseEntity.status(ErrorCode.METHOD_NOT_ALLOWED.getStatus())
+        .body(ErrorResponse.of(ErrorCode.METHOD_NOT_ALLOWED));
+  }
+
+  // 지원하지 않는 Content-Type으로 요청 본문이 전송되었을 때 발생
+  @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+  public ResponseEntity<ErrorResponse> handleMediaTypeNotSupported(
+      HttpMediaTypeNotSupportedException e) {
+    log.warn("Unsupported media type: {}", e.getContentType());
+    return ResponseEntity.status(ErrorCode.UNSUPPORTED_MEDIA_TYPE.getStatus())
+        .body(ErrorResponse.of(ErrorCode.UNSUPPORTED_MEDIA_TYPE));
   }
 
   // 예상하지 못한 예외는 상세를 숨기고 로그만 남긴다 (보안상 내부 정보 노출 금지)

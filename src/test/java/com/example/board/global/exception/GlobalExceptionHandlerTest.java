@@ -1,5 +1,6 @@
 package com.example.board.global.exception;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -40,5 +41,30 @@ class GlobalExceptionHandlerTest {
         .andExpect(status().isBadRequest())
         .andExpect(jsonPath("$.code").value("INVALID_INPUT"))
         .andExpect(jsonPath("$.errors").isArray());
+  }
+
+  @Test
+  void should_return400MalformedRequest_whenJsonBodyBroken() throws Exception {
+    String brokenJson = "{\"username\": ";
+
+    mockMvc.perform(post("/api/v1/auth/login")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(brokenJson))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("MALFORMED_REQUEST"));
+  }
+
+  @Test
+  void should_return400TypeMismatch_whenPathVariableNotLong() throws Exception {
+    mockMvc.perform(get("/api/v1/posts/abc"))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("TYPE_MISMATCH"));
+  }
+
+  @Test
+  void should_return405MethodNotAllowed_whenUnsupportedHttpMethod() throws Exception {
+    mockMvc.perform(delete("/api/v1/auth/login"))
+        .andExpect(status().isMethodNotAllowed())
+        .andExpect(jsonPath("$.code").value("METHOD_NOT_ALLOWED"));
   }
 }
