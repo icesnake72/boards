@@ -32,12 +32,18 @@ public class SecurityConfig {
   @Bean
   public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
     http
+        // CSRF 보호 끔 — 쿠키 세션이 아닌 토큰 인증이라 불필요 (REST API)
         .csrf(AbstractHttpConfigurer::disable)
+        // 폼 로그인 화면 끔 — 로그인은 /auth/login JSON API로 직접 처리
         .formLogin(AbstractHttpConfigurer::disable)
+        // HTTP Basic 인증 끔 — Bearer 토큰만 사용
         .httpBasic(AbstractHttpConfigurer::disable)
+        // 세션을 만들지 않음(stateless) — 상태는 토큰이 들고 다닌다
         .sessionManagement(session ->
             session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+        // 모든 요청 허용 — 인증/인가는 @LoginUserId Resolver와 서비스가 직접 판단
         .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
+        // 우리 JWT 필터를 표준 인증 필터 앞에 끼움 — 컨트롤러 전에 토큰→userId 준비
         .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
     return http.build();
   }
