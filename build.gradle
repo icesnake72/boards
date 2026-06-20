@@ -18,6 +18,8 @@ repositories {
     mavenCentral()
 }
 
+// Spring Web, Spring Security, JPA, MySQL Driver(Connector - J), Validation, Lombok, DevTools
+
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-security'
