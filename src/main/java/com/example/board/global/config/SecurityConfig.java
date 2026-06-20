@@ -1,6 +1,7 @@
 package com.example.board.global.config;
 
 import com.example.board.auth.jwt.JwtAuthenticationFilter;
+import com.example.board.user.Role;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -64,9 +65,9 @@ public class SecurityConfig {
             .requestMatchers(HttpMethod.GET, "/api/v1/profiles/*").permitAll()
             // 게시판 생성/수정/삭제는 ADMIN 전용. "/api/v1/boards/*"는 추가 세그먼트 없는 경로만 매칭하므로
             // "/api/v1/boards/{boardId}/posts"(게시글)는 여기에 걸리지 않는다.
-            .requestMatchers(HttpMethod.POST, "/api/v1/boards").hasRole("ADMIN")
-            .requestMatchers(HttpMethod.PUT, "/api/v1/boards/*").hasRole("ADMIN")
-            .requestMatchers(HttpMethod.DELETE, "/api/v1/boards/*").hasRole("ADMIN")
+            .requestMatchers(HttpMethod.POST, "/api/v1/boards").hasRole(Role.ADMIN.name())
+            .requestMatchers(HttpMethod.PUT, "/api/v1/boards/*").hasRole(Role.ADMIN.name())
+            .requestMatchers(HttpMethod.DELETE, "/api/v1/boards/*").hasRole(Role.ADMIN.name())
             .anyRequest().authenticated())
         // 401/403을 우리 ErrorResponse JSON으로 응답
         .exceptionHandling(e -> e
