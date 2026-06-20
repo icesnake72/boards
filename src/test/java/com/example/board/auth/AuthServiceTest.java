@@ -81,14 +81,14 @@ class AuthServiceTest {
 
   @Test
   void should_issueValidJwt_whenLoginSucceeds() {
-    UserResponse signedUp =
-        authService.signup(new SignupRequest("tester1", "tester1@example.com", "password123", "테스터"));
+    authService.signup(new SignupRequest("tester1", "tester1@example.com", "password123", "테스터"));
 
     TokenResponse response = authService.login(new LoginRequest("tester1", "password123"));
 
     assertThat(response.accessToken()).isNotBlank();
     assertThat(response.tokenType()).isEqualTo("Bearer");
-    assertThat(tokenProvider.getUserId(response.accessToken())).isEqualTo(signedUp.id());
+    assertThat(tokenProvider.validateToken(response.accessToken())).isTrue();
+    assertThat(tokenProvider.getUsername(response.accessToken())).isEqualTo("tester1");
   }
 
   @Test

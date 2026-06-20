@@ -19,7 +19,7 @@ public enum ErrorCode {
   NICKNAME_DUPLICATED(HttpStatus.CONFLICT, "이미 사용 중인 nickname입니다."),
 
   POST_ACCESS_DENIED(HttpStatus.FORBIDDEN, "게시글에 대한 권한이 없습니다."),
-  ADMIN_ONLY(HttpStatus.FORBIDDEN, "관리자만 수행할 수 있습니다."),
+  ACCESS_DENIED(HttpStatus.FORBIDDEN, "접근 권한이 없습니다."),
 
   LOGIN_REQUIRED(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다."),
   LOGIN_FAILED(HttpStatus.UNAUTHORIZED, "username 또는 password가 올바르지 않습니다."),

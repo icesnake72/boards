@@ -1,6 +1,5 @@
 package com.example.board.board;
 
-import com.example.board.auth.LoginUserId;
 import com.example.board.board.dto.BoardCreateRequest;
 import com.example.board.board.dto.BoardResponse;
 import com.example.board.board.dto.BoardUpdateRequest;
@@ -35,28 +34,23 @@ public class BoardController {
     return boardService.getBoard(id);
   }
 
-  // 게시판 생성/수정/삭제는 ADMIN 전용 — Role 검증은 서비스에서 수행
+  // 게시판 생성/수정/삭제는 ADMIN 전용 — 인가는 SecurityConfig의 hasRole("ADMIN")이 선언적으로 막는다.
   @PostMapping
   @ResponseStatus(HttpStatus.CREATED)
-  public BoardResponse create(
-      @LoginUserId Long userId,
-      @Valid @RequestBody BoardCreateRequest request) {
-    return boardService.create(userId, request);
+  public BoardResponse create(@Valid @RequestBody BoardCreateRequest request) {
+    return boardService.create(request);
   }
 
   @PutMapping("/{id}")
   public BoardResponse update(
       @PathVariable Long id,
-      @LoginUserId Long userId,
       @Valid @RequestBody BoardUpdateRequest request) {
-    return boardService.update(id, userId, request);
+    return boardService.update(id, request);
   }
 
   @DeleteMapping("/{id}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
-  public void delete(
-      @PathVariable Long id,
-      @LoginUserId Long userId) {
-    boardService.delete(id, userId);
+  public void delete(@PathVariable Long id) {
+    boardService.delete(id);
   }
 }

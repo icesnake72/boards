@@ -1,11 +1,15 @@
-# curl 테스트 가이드 — 전체 API & 에러 응답 (단계 2: JWT)
+# curl 테스트 가이드 — 전체 API & 에러 응답 (단계 3: Spring Security 표준)
 
-**과정명**: 강의용 Spring Boot 게시판 — JWT 단계 통합 테스트
-**브랜치**: `step2-jwt`
+**과정명**: 강의용 Spring Boot 게시판 — JWT + Spring Security 표준 통합 테스트
+**브랜치**: `step3-spring-security`
 **포트**: 8090 (`application.yaml`의 `server.port`)
-**인증 방식**: JWT (Bearer 토큰) — 세션/쿠키 없음
+**인증 방식**: JWT (Bearer 토큰) + Spring Security 표준 인가 — 세션/쿠키 없음
 
 > 이 문서의 모든 명령은 실제 실행해 응답을 확인한 것이다. 상태 코드와 응답 본문이 문서와 일치해야 한다.
+>
+> **단계 2 → 3 변경점**: 인가가 Spring Security 선언적 방식으로 바뀌어, 권한 부족(ADMIN 아님)의 403 code가
+> `ADMIN_ONLY` → **`ACCESS_DENIED`**(SecurityConfig의 hasRole 거부)로 바뀌었다. 글 소유권 403은
+> `POST_ACCESS_DENIED` 그대로(서비스 검사). 401(`LOGIN_REQUIRED`)은 커스텀 EntryPoint가 응답한다.
 
 ---
 
@@ -141,10 +145,10 @@ curl -i -X POST $B/boards \
   -d '{"name":"자유게시판","description":"아무 이야기나"}'
 ```
 
-**기대**: `403 Forbidden`
+**기대**: `403 Forbidden` — SecurityConfig의 `hasRole("ADMIN")`이 막고, AccessDeniedHandler가 응답
 
 ```json
-{"code":"ADMIN_ONLY","message":"관리자만 수행할 수 있습니다.","timestamp":"..."}
+{"code":"ACCESS_DENIED","message":"접근 권한이 없습니다.","timestamp":"..."}
 ```
 
 ### 4-2. admin 토큰 발급 후 게시판 생성 (→ 201)
@@ -359,10 +363,10 @@ curl -i -X POST $B/auth/login \
 | 깨진 JSON 본문 | 400 | `MALFORMED_REQUEST` |
 | 경로/파라미터 타입 불일치 | 400 | `TYPE_MISMATCH` |
 | 필수 파라미터 누락 | 400 | `MISSING_PARAMETER` |
-| 비로그인 / 토큰 불량 | 401 | `LOGIN_REQUIRED` |
+| 비로그인 / 토큰 불량 | 401 | `LOGIN_REQUIRED` (EntryPoint) |
 | 로그인 실패 | 401 | `LOGIN_FAILED` |
-| 작성자 아님 | 403 | `POST_ACCESS_DENIED` |
-| 관리자 아님 | 403 | `ADMIN_ONLY` |
+| 작성자 아님 (소유권) | 403 | `POST_ACCESS_DENIED` (서비스) |
+| 관리자 아님 (role) | 403 | `ACCESS_DENIED` (hasRole 거부) |
 | 리소스 없음 | 404 | `*_NOT_FOUND` |
 | 지원 않는 메서드 | 405 | `METHOD_NOT_ALLOWED` |
 | 중복 | 409 | `DUPLICATE_*` / `NICKNAME_DUPLICATED` |

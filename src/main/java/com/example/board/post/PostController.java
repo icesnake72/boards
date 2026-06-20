@@ -1,6 +1,6 @@
 package com.example.board.post;
 
-import com.example.board.auth.LoginUserId;
+import com.example.board.auth.CustomUserDetails;
 import com.example.board.post.dto.PostCreateRequest;
 import com.example.board.post.dto.PostListResponse;
 import com.example.board.post.dto.PostResponse;
@@ -12,6 +12,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -37,14 +38,14 @@ public class PostController {
     return postService.getPosts(boardId, pageable);
   }
 
-  // @LoginUserId가 로그인 사용자 id 주입과 비로그인 401 처리를 담당한다.
+  // 인증 여부는 SecurityFilterChain이 판단하고, 로그인 사용자는 @AuthenticationPrincipal로 주입된다.
   @PostMapping("/boards/{boardId}/posts")
   @ResponseStatus(HttpStatus.CREATED)
   public PostResponse create(
       @PathVariable Long boardId,
-      @LoginUserId Long userId,
+      @AuthenticationPrincipal CustomUserDetails userDetails,
       @Valid @RequestBody PostCreateRequest request) {
-    return postService.create(boardId, userId, request);
+    return postService.create(boardId, userDetails.getId(), request);
   }
 
   @GetMapping("/posts/{id}")
@@ -55,16 +56,16 @@ public class PostController {
   @PutMapping("/posts/{id}")
   public PostResponse update(
       @PathVariable Long id,
-      @LoginUserId Long userId,
+      @AuthenticationPrincipal CustomUserDetails userDetails,
       @Valid @RequestBody PostUpdateRequest request) {
-    return postService.update(id, userId, request);
+    return postService.update(id, userDetails.getId(), request);
   }
 
   @DeleteMapping("/posts/{id}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public void delete(
       @PathVariable Long id,
-      @LoginUserId Long userId) {
-    postService.delete(id, userId);
+      @AuthenticationPrincipal CustomUserDetails userDetails) {
+    postService.delete(id, userDetails.getId());
   }
 }

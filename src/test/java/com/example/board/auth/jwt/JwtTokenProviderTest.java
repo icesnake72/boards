@@ -14,17 +14,17 @@ class JwtTokenProviderTest {
   private final JwtTokenProvider provider = new JwtTokenProvider(SECRET, 3600);
 
   @Test
-  void should_roundTripUserId_whenCreateThenGetUserId() {
-    String token = provider.createToken(42L);
+  void should_roundTripUsername_whenCreateThenGetUsername() {
+    String token = provider.createToken("tester1");
 
-    assertThat(provider.getUserId(token)).isEqualTo(42L);
+    assertThat(provider.getUsername(token)).isEqualTo("tester1");
     assertThat(provider.validateToken(token)).isTrue();
   }
 
   @Test
   void should_returnFalse_whenTokenExpired() {
     JwtTokenProvider expiredProvider = new JwtTokenProvider(SECRET, -1);
-    String expired = expiredProvider.createToken(1L);
+    String expired = expiredProvider.createToken("tester1");
 
     assertThat(provider.validateToken(expired)).isFalse();
   }
@@ -32,7 +32,7 @@ class JwtTokenProviderTest {
   @Test
   void should_returnFalse_whenSignatureTampered() {
     JwtTokenProvider otherProvider = new JwtTokenProvider(OTHER_SECRET, 3600);
-    String foreignToken = otherProvider.createToken(1L);
+    String foreignToken = otherProvider.createToken("tester1");
 
     assertThat(provider.validateToken(foreignToken)).isFalse();
   }
