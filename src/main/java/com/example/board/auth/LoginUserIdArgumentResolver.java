@@ -4,6 +4,7 @@ import com.example.board.global.exception.ErrorCode;
 import com.example.board.global.exception.UnauthorizedException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.MethodParameter;
+import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
 import org.springframework.web.bind.support.WebDataBinderFactory;
 import org.springframework.web.context.request.NativeWebRequest;
@@ -16,12 +17,14 @@ public class LoginUserIdArgumentResolver implements HandlerMethodArgumentResolve
 
   @Override
   public boolean supportsParameter(MethodParameter parameter) {
+    // @LoginUserId 붙었고 타입이 Long이면 true를 반환
     return parameter.hasParameterAnnotation(LoginUserId.class)
         && parameter.getParameterType().equals(Long.class);
   }
 
   @Override
   public Object resolveArgument(
+      @NonNull
       MethodParameter parameter,
       ModelAndViewContainer mavContainer,
       NativeWebRequest webRequest,
