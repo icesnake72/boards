@@ -15,6 +15,10 @@ import com.example.board.user.UserRepository;
 import com.example.board.user.dto.UserResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,6 +31,7 @@ public class AuthService {
   private final UserProfileRepository userProfileRepository;
   private final PasswordEncoder passwordEncoder;
   private final JwtTokenProvider tokenProvider;
+  private final AuthenticationManager authenticationManager;
 
   @Value("${jwt.access-token-validity-seconds}")
   private long accessTokenValiditySeconds;
@@ -54,18 +59,20 @@ public class AuthService {
     return UserResponse.from(user);
   }
 
-  // username 미존재와 password 불일치를 같은 메시지(LOGIN_FAILED)로 응답한다
-  // — 어떤 계정이 존재하는지 노출하지 않기 위함 (user enumeration 방지)
-  // 강의 포인트: 인증 성공 시 세션에 저장하지 않고, userId를 담은 JWT를 발급해 클라이언트에 돌려준다(stateless).
+  // 강의 포인트: 단계 3은 AuthenticationManager에 인증을 위임한다.
+  // Spring이 CustomUserDetailsService로 사용자를 로딩하고 PasswordEncoder로 비밀번호를 검증한다.
+  // username 미존재와 password 불일치를 같은 메시지(LOGIN_FAILED)로 응답한다 — user enumeration 방지.
+  // 인증 성공 시 세션에 저장하지 않고, username을 담은 JWT를 발급해 클라이언트에 돌려준다(stateless).
   @Transactional(readOnly = true)
   public TokenResponse login(LoginRequest request) {
-    User user = userRepository.findByUsername(request.username())
-        .orElseThrow(() -> new UnauthorizedException(ErrorCode.LOGIN_FAILED));
-
-    if (!passwordEncoder.matches(request.password(), user.getPassword())) {
+    try {
+      Authentication authentication = authenticationManager.authenticate(
+          new UsernamePasswordAuthenticationToken(request.username(), request.password()));
+      CustomUserDetails principal = (CustomUserDetails) authentication.getPrincipal();
+      String accessToken = tokenProvider.createToken(principal.getUsername());
+      return TokenResponse.bearer(accessToken, accessTokenValiditySeconds);
+    } catch (AuthenticationException e) {
       throw new UnauthorizedException(ErrorCode.LOGIN_FAILED);
     }
-    String accessToken = tokenProvider.createToken(user.getId());
-    return TokenResponse.bearer(accessToken, accessTokenValiditySeconds);
   }
 }
