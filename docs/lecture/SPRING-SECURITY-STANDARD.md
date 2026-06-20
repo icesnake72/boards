@@ -203,11 +203,13 @@ public PostResponse create(
     .requestMatchers(HttpMethod.GET, "/api/v1/posts/**").permitAll()
     .requestMatchers("/api/v1/profiles/me").authenticated()        // /me 먼저 매칭
     .requestMatchers(HttpMethod.GET, "/api/v1/profiles/*").permitAll()
-    .requestMatchers(HttpMethod.POST, "/api/v1/boards").hasRole("ADMIN")
-    .requestMatchers(HttpMethod.PUT, "/api/v1/boards/*").hasRole("ADMIN")
-    .requestMatchers(HttpMethod.DELETE, "/api/v1/boards/*").hasRole("ADMIN")
+    .requestMatchers(HttpMethod.POST, "/api/v1/boards").hasRole(Role.ADMIN.name())
+    .requestMatchers(HttpMethod.PUT, "/api/v1/boards/*").hasRole(Role.ADMIN.name())
+    .requestMatchers(HttpMethod.DELETE, "/api/v1/boards/*").hasRole(Role.ADMIN.name())
     .anyRequest().authenticated())
 ```
+
+> `hasRole(...)`은 String만 받지만, 리터럴 `"ADMIN"` 대신 `Role.ADMIN.name()`을 쓰면 enum이 단일 출처가 되어 리팩토링에 안전하다. (`hasRole`이 내부적으로 `ROLE_` 접두어를 붙이므로 `"ADMIN"`을 넘기면 `ROLE_ADMIN`을 검사 — `CustomUserDetails`의 authority와 짝이 맞는다.)
 
 > **매칭 순서 주의 2가지**:
 > - `/profiles/me`(인증 필요)를 `/profiles/*`(공개)보다 **먼저** 선언해야 한다. 위에서부터 먼저 맞는 규칙이 적용되기 때문.
@@ -259,7 +261,52 @@ private void validateAuthor(Post post, Long userId) {
 
 ---
 
-## 5. 단계 2 → 3 전환 요약
+## 5. 전환 코딩 순서 (단계 2 → 3)
+
+원칙: **표준 부품을 먼저 만들고(A~C) → 호출부를 갈아끼운 뒤 옛 장치를 제거(D)**. 표준 부품을 다 만들어 둔 다음 마지막에 옛 코드를 걷어내야 컴파일 충돌이 가장 적다.
+
+### Phase A — 표준 부품 만들기 (독립적, 먼저)
+
+1. **`CustomUserDetails`** — `User` → `UserDetails` 어댑터. 의존성 없음. 다른 표준 코드가 모두 사용하므로 가장 먼저. (`getId()`, `getAuthorities()`)
+2. **`CustomUserDetailsService`** — `loadUserByUsername`. 1번 + `UserRepository` 필요. 로그인·매 요청 인증이 **모두** 사용하는 토대.
+
+### Phase B — 발급/검증 경로를 표준으로
+
+3. **`JwtTokenProvider`: subject userId → username.** `createToken(String username)`, `getUsername(token)`. 로그인(5)과 필터(6)가 의존하므로 먼저.
+4. **`AuthenticationManager` 빈 노출** (SecurityConfig). 2번 + `PasswordEncoder`로 `DaoAuthenticationProvider` 자동 구성 → 2번 다음.
+5. **`AuthService.login` 전환** — `authenticationManager.authenticate()` 위임. 4 + 3 필요. 실패는 `AuthenticationException` → `LOGIN_FAILED`.
+6. **`JwtAuthenticationFilter` 전환** — request attribute 제거, `SecurityContextHolder...setAuthentication(...)`. 2(loadUserByUsername) + 3(getUsername) 필요.
+
+### Phase C — 인가/예외 표준화
+
+7. **`ErrorCode.ACCESS_DENIED`(403) 추가 + `RestAuthenticationEntryPoint`(401) / `RestAccessDeniedHandler`(403).** 8번이 연결하므로 먼저.
+8. **`SecurityConfig` 완성** — `authorizeHttpRequests`(공개/`hasRole`/authenticated) + `exceptionHandling(entryPoint, accessDeniedHandler)` + 필터 등록. 6 + 7 필요.
+
+### Phase D — 호출부 전환 & 옛 코드 제거 (컴파일 함께 묶임)
+
+9. **컨트롤러 3곳: `@LoginUserId Long` → `@AuthenticationPrincipal CustomUserDetails`** (`userDetails.getId()`). **BoardService**: 인가가 8번 `hasRole`로 이동 → `validateAdmin`·userId 파라미터 제거. **PostService**: 작성자 소유권 검사는 **유지**.
+10. **옛 장치 제거**: `LoginUserId`, `LoginUserIdArgumentResolver`, `AuthConst` 삭제 + `WebConfig`의 Resolver 등록 제거(Page 직렬화는 유지). 9번에서 사용처를 모두 바꾼 **뒤** 제거해야 컴파일이 안 깨진다.
+
+### Phase E — 검증
+
+11. 테스트 갱신(삭제: `LoginUserIdArgumentResolverTest` / 신규: `CustomUserDetailsServiceTest`, `SecurityIntegrationTest`) + `./gradlew build` + curl 런타임 확인.
+
+```
+A. 표준 부품   1.CustomUserDetails → 2.CustomUserDetailsService
+B. 경로 표준화 3.JwtTokenProvider(username) → 4.AuthenticationManager빈
+               → 5.AuthService.login(위임) → 6.JwtAuthenticationFilter(SecurityContext)
+C. 인가/예외   7.ACCESS_DENIED + EntryPoint/AccessDeniedHandler → 8.SecurityConfig
+D. 호출부/정리 9.컨트롤러 @AuthenticationPrincipal + BoardService → 10.옛 장치 제거
+E. 검증        11.테스트 + 빌드/런타임
+```
+
+> **핵심 주의 — 컴파일 결합**: 9·10번(컨트롤러 교체 ↔ `@LoginUserId` 제거)은 서로 맞물려 있어, 사용처를 모두 바꾼 뒤(9) 제거(10)해야 한다. 프로젝트 전체가 다시 컴파일되는 시점은 **D 단계 완료 후**다 — 단계 1·2의 점진적 전환과 달리 빅뱅에 가깝다.
+
+> **통찰**: 단계 2→3은 "직접 만든 것을 표준으로 1:1 대체"라서 **만들기(A~C) → 갈아끼우기(D)** 두 국면으로 나뉜다.
+
+---
+
+## 6. 단계 2 → 3 전환 요약
 
 | 항목 | 단계 2 (수동 JWT) | 단계 3 (Security 표준) |
 |------|-------------------|------------------------|
@@ -275,7 +322,7 @@ private void validateAuthor(Post post, Long userId) {
 
 ---
 
-## 6. 핵심 요약 한 장
+## 7. 핵심 요약 한 장
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
