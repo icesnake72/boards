@@ -102,4 +102,19 @@ class SecurityIntegrationTest {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.username").value("user1"));
   }
+
+  // /auth/reissue는 공개 엔드포인트다. access token 없이도 진입해야 하며,
+  // refresh token이 유효하지 않으면 401(INVALID_REFRESH_TOKEN)을 반환한다.
+  @Test
+  void should_reachReissueWithoutAccessToken() throws Exception {
+    String body = """
+        {"refreshToken": "no-such-token"}
+        """;
+
+    mockMvc.perform(post("/api/v1/auth/reissue")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(body))
+        .andExpect(status().isUnauthorized())
+        .andExpect(jsonPath("$.code").value("INVALID_REFRESH_TOKEN"));
+  }
 }
