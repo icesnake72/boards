@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.example.board.auth.dto.LoginRequest;
 import com.example.board.auth.dto.SignupRequest;
-import com.example.board.auth.dto.TokenResponse;
+import com.example.board.auth.dto.TokenPair;
 import com.example.board.auth.jwt.JwtTokenProvider;
 import com.example.board.global.exception.DuplicateException;
 import com.example.board.global.exception.ErrorCode;
@@ -90,12 +90,11 @@ class AuthServiceTest {
   void should_issueValidJwt_whenLoginSucceeds() {
     authService.signup(new SignupRequest("tester1", "tester1@example.com", "password123", "테스터"));
 
-    TokenResponse response = authService.login(new LoginRequest("tester1", "password123"));
+    TokenPair tokens = authService.login(new LoginRequest("tester1", "password123"));
 
-    assertThat(response.accessToken()).isNotBlank();
-    assertThat(response.tokenType()).isEqualTo("Bearer");
-    assertThat(tokenProvider.validateToken(response.accessToken())).isTrue();
-    assertThat(tokenProvider.getUsername(response.accessToken())).isEqualTo("tester1");
+    assertThat(tokens.accessToken()).isNotBlank();
+    assertThat(tokenProvider.validateToken(tokens.accessToken())).isTrue();
+    assertThat(tokenProvider.getUsername(tokens.accessToken())).isEqualTo("tester1");
   }
 
   @Test
@@ -103,11 +102,11 @@ class AuthServiceTest {
     authService.signup(new SignupRequest("tester1", "tester1@example.com", "password123", "테스터"));
     Long userId = userRepository.findByUsername("tester1").orElseThrow().getId();
 
-    TokenResponse response = authService.login(new LoginRequest("tester1", "password123"));
+    TokenPair tokens = authService.login(new LoginRequest("tester1", "password123"));
 
-    assertThat(response.refreshToken()).isNotBlank();
+    assertThat(tokens.refreshToken()).isNotBlank();
     RefreshToken stored = refreshTokenRepository.findByUserId(userId).orElseThrow();
-    assertThat(stored.getToken()).isEqualTo(response.refreshToken());
+    assertThat(stored.getToken()).isEqualTo(tokens.refreshToken());
     assertThat(stored.isExpired()).isFalse();
   }
 
@@ -128,9 +127,9 @@ class AuthServiceTest {
   @Test
   void should_reissueNewAccessTokenKeepingRefresh_whenRefreshTokenValid() {
     authService.signup(new SignupRequest("tester1", "tester1@example.com", "password123", "테스터"));
-    TokenResponse login = authService.login(new LoginRequest("tester1", "password123"));
+    TokenPair login = authService.login(new LoginRequest("tester1", "password123"));
 
-    TokenResponse reissued = authService.reissue(login.refreshToken());
+    TokenPair reissued = authService.reissue(login.refreshToken());
 
     assertThat(reissued.refreshToken()).isEqualTo(login.refreshToken());
     assertThat(tokenProvider.validateToken(reissued.accessToken())).isTrue();
@@ -161,7 +160,8 @@ class AuthServiceTest {
   @Test
   void should_deleteRefreshToken_whenLogout() {
     authService.signup(new SignupRequest("tester1", "tester1@example.com", "password123", "테스터"));
-    String refreshToken = authService.login(new LoginRequest("tester1", "password123")).refreshToken();
+    String refreshToken =
+        authService.login(new LoginRequest("tester1", "password123")).refreshToken();
 
     authService.logout(refreshToken);
 

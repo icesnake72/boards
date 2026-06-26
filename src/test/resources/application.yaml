@@ -13,3 +13,10 @@ jwt:
   secret: bG9jYWwtZGV2LWp3dC1zZWNyZXQta2V5LWZvci1ib2FyZC1sZWN0dXJlLTI1Ng==
   access-token-validity-seconds: 3600
   refresh-token-validity-seconds: 1209600
+
+app:
+  refresh-cookie:
+    name: refreshToken
+    secure: false
+    same-site: Strict
+    path: /api/v1/auth

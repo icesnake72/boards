@@ -23,6 +23,16 @@ jwt:
   access-token-validity-seconds: 3600  # 1시간
   refresh-token-validity-seconds: 1209600  # 14일
 
+# refresh token을 담는 httpOnly 쿠키 옵션 (단계 5)
+app:
+  refresh-cookie:
+    name: refreshToken
+    # 운영(HTTPS)에선 반드시 true. 로컬은 HTTP라 true면 쿠키가 전송되지 않아 테스트가 깨진다.
+    secure: ${APP_REFRESH_COOKIE_SECURE:false}
+    same-site: Strict
+    # reissue/logout 모두 이 경로 아래라 쿠키가 전송된다. 노출 면적을 auth 경로로 좁힌다.
+    path: /api/v1/auth
+
 logging:
   level:
     org.hibernate.SQL: debug

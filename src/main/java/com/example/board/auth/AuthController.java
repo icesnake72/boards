@@ -1,13 +1,19 @@
 package com.example.board.auth;
 
 import com.example.board.auth.dto.LoginRequest;
-import com.example.board.auth.dto.RefreshTokenRequest;
 import com.example.board.auth.dto.SignupRequest;
+import com.example.board.auth.dto.TokenPair;
 import com.example.board.auth.dto.TokenResponse;
+import com.example.board.global.exception.ErrorCode;
+import com.example.board.global.exception.UnauthorizedException;
 import com.example.board.user.dto.UserResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseCookie;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -20,6 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
   private final AuthService authService;
+  private final RefreshCookieFactory refreshCookieFactory;
 
   @PostMapping("/signup")
   @ResponseStatus(HttpStatus.CREATED)
@@ -27,27 +34,42 @@ public class AuthController {
     return authService.signup(request);
   }
 
-  // JWT 로그인 흐름 (강의 포인트):
-  // 1. 서버는 username/password를 검증하고 access token(stateless JWT) + refresh token(opaque, DB 저장)을 발급한다
-  // 2. access token으로는 매 요청을 인증하고(stateless), refresh token으로는 만료된 access token만 재발급한다(stateful)
-  // 3. 이후 클라이언트는 매 요청 Authorization: Bearer <accessToken> 헤더로 자신을 증명한다
+  // 단계 5 핵심: access token은 본문(JSON)으로, refresh token은 httpOnly 쿠키(Set-Cookie)로 내려준다.
+  // refresh token을 본문에 두지 않아 JS가 접근할 수 없고(XSS 탈취 방어), 브라우저가 자동으로 동봉해 보낸다.
   @PostMapping("/login")
-  public TokenResponse login(@Valid @RequestBody LoginRequest request) {
-    return authService.login(request);
+  public ResponseEntity<TokenResponse> login(@Valid @RequestBody LoginRequest request) {
+    TokenPair tokens = authService.login(request);
+    ResponseCookie refreshCookie =
+        refreshCookieFactory.create(tokens.refreshToken(), tokens.refreshTokenValiditySeconds());
+    return ResponseEntity.ok()
+        .header(HttpHeaders.SET_COOKIE, refreshCookie.toString())
+        .body(TokenResponse.bearer(tokens.accessToken(), tokens.accessTokenValiditySeconds()));
   }
 
-  // access token이 만료되면 refresh token으로 새 access token만 재발급한다(refresh token은 그대로).
-  // refresh token 자체가 자격증명이라 인증 헤더 없이 호출된다(/auth/** 공개).
+  // 단계 5: 더 이상 본문(RefreshTokenRequest)으로 받지 않고 httpOnly 쿠키에서 refresh token을 읽는다.
+  // 쿠키가 없으면 401(INVALID_REFRESH_TOKEN). 새 access token만 본문으로 반환한다(refresh 쿠키는 그대로).
   @PostMapping("/reissue")
-  public TokenResponse reissue(@Valid @RequestBody RefreshTokenRequest request) {
-    return authService.reissue(request.refreshToken());
+  public ResponseEntity<TokenResponse> reissue(
+      @CookieValue(name = "refreshToken", required = false) String refreshToken) {
+    if (refreshToken == null) {
+      throw new UnauthorizedException(ErrorCode.INVALID_REFRESH_TOKEN);
+    }
+    TokenPair tokens = authService.reissue(refreshToken);
+    return ResponseEntity.ok()
+        .body(TokenResponse.bearer(tokens.accessToken(), tokens.accessTokenValiditySeconds()));
   }
 
-  // 이제 stateless가 아니다 — 서버 측 refresh token을 DB에서 지운다.
-  // access token은 여전히 stateless라 만료 전까지 유효하다(강제 무효화는 토큰 블랙리스트 필요 — 후속 주제).
+  // 단계 5: 쿠키에서 refresh token을 읽어 서버 DB에서 지우고(idempotent), 클라이언트 쿠키도 maxAge=0으로 만료시킨다.
+  // access token은 stateless라 만료 전까지 유효하다(강제 무효화는 토큰 블랙리스트 필요 — 후속 주제).
   @PostMapping("/logout")
-  @ResponseStatus(HttpStatus.NO_CONTENT)
-  public void logout(@Valid @RequestBody RefreshTokenRequest request) {
-    authService.logout(request.refreshToken());
+  public ResponseEntity<Void> logout(
+      @CookieValue(name = "refreshToken", required = false) String refreshToken) {
+    if (refreshToken != null) {
+      authService.logout(refreshToken);
+    }
+    ResponseCookie expired = refreshCookieFactory.expire();
+    return ResponseEntity.noContent()
+        .header(HttpHeaders.SET_COOKIE, expired.toString())
+        .build();
   }
 }

@@ -2,7 +2,7 @@ package com.example.board.auth;
 
 import com.example.board.auth.dto.LoginRequest;
 import com.example.board.auth.dto.SignupRequest;
-import com.example.board.auth.dto.TokenResponse;
+import com.example.board.auth.dto.TokenPair;
 import com.example.board.auth.jwt.JwtTokenProvider;
 import com.example.board.global.exception.DuplicateException;
 import com.example.board.global.exception.ErrorCode;
@@ -71,14 +71,16 @@ public class AuthService {
   // access token은 username을 담은 stateless JWT(1시간). refresh token은 opaque UUID로 DB에 저장한다(stateful).
   // refresh token을 발급/교체해야 하므로 쓰기 트랜잭션이다(readOnly 아님).
   @Transactional
-  public TokenResponse login(LoginRequest request) {
+  public TokenPair login(LoginRequest request) {
     try {
       Authentication authentication = authenticationManager.authenticate(
           new UsernamePasswordAuthenticationToken(request.username(), request.password()));
       CustomUserDetails principal = (CustomUserDetails) authentication.getPrincipal();
       String accessToken = tokenProvider.createToken(principal.getUsername());
       String refreshToken = issueRefreshToken(principal.getId());
-      return TokenResponse.bearer(accessToken, refreshToken, accessTokenValiditySeconds);
+      // 토큰 생성까지만 책임진다. 본문(access)·쿠키(refresh) 전달은 컨트롤러가 결정.
+      return new TokenPair(
+          accessToken, refreshToken, accessTokenValiditySeconds, refreshTokenValiditySeconds);
     } catch (AuthenticationException e) {
       throw new UnauthorizedException(ErrorCode.LOGIN_FAILED);
     }
@@ -88,7 +90,7 @@ public class AuthService {
   // refresh token 자체가 자격증명이므로 별도 인증 없이 호출된다(SecurityConfig에서 /auth/** 공개).
   // refresh token은 회전(rotation)하지 않고 만료 전까지 그대로 둔다 — 회전은 후속 주제.
   @Transactional
-  public TokenResponse reissue(String refreshToken) {
+  public TokenPair reissue(String refreshToken) {
     RefreshToken stored = refreshTokenRepository.findByToken(refreshToken)
         .orElseThrow(() -> new UnauthorizedException(ErrorCode.INVALID_REFRESH_TOKEN));
     if (stored.isExpired()) {
@@ -98,7 +100,9 @@ public class AuthService {
     User user = userRepository.findById(stored.getUserId())
         .orElseThrow(() -> new UnauthorizedException(ErrorCode.INVALID_REFRESH_TOKEN));
     String newAccessToken = tokenProvider.createToken(user.getUsername());
-    return TokenResponse.bearer(newAccessToken, refreshToken, accessTokenValiditySeconds);
+    // access token만 새로 발급한다. refresh token은 회전하지 않고 기존 값을 그대로 돌려준다.
+    return new TokenPair(
+        newAccessToken, refreshToken, accessTokenValiditySeconds, refreshTokenValiditySeconds);
   }
 
   // 서버 측 refresh token을 삭제한다. 이미 없어도 예외 없이 통과(idempotent).

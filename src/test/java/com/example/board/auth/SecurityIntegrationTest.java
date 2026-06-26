@@ -1,7 +1,9 @@
 package com.example.board.auth;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -11,6 +13,7 @@ import com.example.board.profile.UserProfileRepository;
 import com.example.board.user.Role;
 import com.example.board.user.User;
 import com.example.board.user.UserRepository;
+import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,6 +23,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.transaction.annotation.Transactional;
 
 // 강의 포인트: 선언적 인가가 실제 토큰으로 동작하는지 검증한다.
@@ -103,18 +107,74 @@ class SecurityIntegrationTest {
         .andExpect(jsonPath("$.username").value("user1"));
   }
 
-  // /auth/reissue는 공개 엔드포인트다. access token 없이도 진입해야 하며,
-  // refresh token이 유효하지 않으면 401(INVALID_REFRESH_TOKEN)을 반환한다.
+  // 단계 5 핵심: 로그인 응답은 access token만 본문에 담고, refresh token은 httpOnly 쿠키로 내려준다.
   @Test
-  void should_reachReissueWithoutAccessToken() throws Exception {
-    String body = """
-        {"refreshToken": "no-such-token"}
-        """;
-
-    mockMvc.perform(post("/api/v1/auth/reissue")
+  void should_setRefreshCookieAndReturnAccessOnly_whenLogin() throws Exception {
+    mockMvc.perform(post("/api/v1/auth/login")
             .contentType(MediaType.APPLICATION_JSON)
-            .content(body))
+            .content(loginBody("user1")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.accessToken").isNotEmpty())
+        .andExpect(jsonPath("$.tokenType").value("Bearer"))
+        // 본문에는 refresh token이 없어야 한다(쿠키로만 전달)
+        .andExpect(jsonPath("$.refreshToken").doesNotExist())
+        // Set-Cookie: refreshToken=...; HttpOnly
+        .andExpect(cookie().exists("refreshToken"))
+        .andExpect(cookie().httpOnly("refreshToken", true))
+        .andExpect(cookie().value("refreshToken", org.hamcrest.Matchers.not("")));
+  }
+
+  // 로그인으로 받은 refresh 쿠키를 reissue 요청에 동봉하면 새 access token을 본문으로 받는다.
+  @Test
+  void should_reissueAccessToken_whenRefreshCookiePresent() throws Exception {
+    MvcResult login = mockMvc.perform(post("/api/v1/auth/login")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(loginBody("user1")))
+        .andExpect(status().isOk())
+        .andReturn();
+    Cookie refreshCookie = login.getResponse().getCookie("refreshToken");
+    assertThat(refreshCookie).isNotNull();
+
+    mockMvc.perform(post("/api/v1/auth/reissue").cookie(refreshCookie))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.accessToken").isNotEmpty())
+        .andExpect(jsonPath("$.refreshToken").doesNotExist());
+  }
+
+  // 단계 5: 본문이 아니라 쿠키에서 refresh token을 읽으므로, 쿠키가 없으면 401이다.
+  @Test
+  void should_return401_whenReissueWithoutRefreshCookie() throws Exception {
+    mockMvc.perform(post("/api/v1/auth/reissue"))
         .andExpect(status().isUnauthorized())
         .andExpect(jsonPath("$.code").value("INVALID_REFRESH_TOKEN"));
+  }
+
+  // 잘못된 refresh 쿠키면 401(INVALID_REFRESH_TOKEN).
+  @Test
+  void should_return401_whenReissueWithInvalidRefreshCookie() throws Exception {
+    mockMvc.perform(post("/api/v1/auth/reissue")
+            .cookie(new Cookie("refreshToken", "no-such-token")))
+        .andExpect(status().isUnauthorized())
+        .andExpect(jsonPath("$.code").value("INVALID_REFRESH_TOKEN"));
+  }
+
+  // 로그아웃은 204와 함께 refresh 쿠키를 maxAge=0(만료)로 내려 클라이언트 쿠키를 제거한다.
+  @Test
+  void should_expireRefreshCookie_whenLogout() throws Exception {
+    MvcResult login = mockMvc.perform(post("/api/v1/auth/login")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(loginBody("user1")))
+        .andReturn();
+    Cookie refreshCookie = login.getResponse().getCookie("refreshToken");
+
+    mockMvc.perform(post("/api/v1/auth/logout").cookie(refreshCookie))
+        .andExpect(status().isNoContent())
+        .andExpect(cookie().maxAge("refreshToken", 0));
+  }
+
+  private String loginBody(String username) {
+    return """
+        {"username": "%s", "password": "password123"}
+        """.formatted(username);
   }
 }
