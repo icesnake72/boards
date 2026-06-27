@@ -12,6 +12,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -53,19 +54,20 @@ public class PostController {
     return postService.getPost(id);
   }
 
+  // 단계 6: 작성자만 수정/삭제 — URL 규칙으로 표현 못 하는 자원 소유권을 커스텀 보안 빈으로 검사.
+  // 글이 없으면 @postSecurity.isAuthor가 404를 던지고, 작성자가 아니면 false → 403.
+  @PreAuthorize("@postSecurity.isAuthor(#id, authentication.principal)")
   @PutMapping("/posts/{id}")
   public PostResponse update(
       @PathVariable Long id,
-      @AuthenticationPrincipal CustomUserDetails userDetails,
       @Valid @RequestBody PostUpdateRequest request) {
-    return postService.update(id, userDetails.getId(), request);
+    return postService.update(id, request);
   }
 
+  @PreAuthorize("@postSecurity.isAuthor(#id, authentication.principal)")
   @DeleteMapping("/posts/{id}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
-  public void delete(
-      @PathVariable Long id,
-      @AuthenticationPrincipal CustomUserDetails userDetails) {
-    postService.delete(id, userDetails.getId());
+  public void delete(@PathVariable Long id) {
+    postService.delete(id);
   }
 }

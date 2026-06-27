@@ -13,6 +13,12 @@ java {
 	}
 }
 
+// 단계 6: @PreAuthorize SpEL의 #id가 컨트롤러 파라미터 이름으로 바인딩되려면 -parameters가 필요하다.
+// (Spring Boot 플러그인이 기본 적용하지만 명시해 보장한다)
+tasks.named('compileJava') {
+	options.compilerArgs << '-parameters'
+}
+
 repositories {
 	mavenCentral()
 }

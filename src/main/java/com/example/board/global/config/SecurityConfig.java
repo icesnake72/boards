@@ -1,13 +1,13 @@
 package com.example.board.global.config;
 
 import com.example.board.auth.jwt.JwtAuthenticationFilter;
-import com.example.board.user.Role;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -20,8 +20,12 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 // 강의 단계 3 — Spring Security 표준(UserDetailsService + 선언적 인가).
 // JwtAuthenticationFilter가 Bearer 토큰을 검증해 SecurityContext에 Authentication을 채우면,
 // 인증/인가는 authorizeHttpRequests 규칙이 선언적으로 판단한다. 서버는 세션을 만들지 않는다(STATELESS).
+// 강의 단계 6 — 메서드 보안(@EnableMethodSecurity, prePostEnabled 기본 true).
+// 인가를 URL 규칙에서 메서드 레벨 @PreAuthorize로 옮긴다.
+// (1) 역할 기반(hasRole) → Board 컨트롤러 메서드, (2) 자원 소유권(작성자만) → @postSecurity 커스텀 빈.
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity
 @RequiredArgsConstructor
 public class SecurityConfig {
 
@@ -63,11 +67,8 @@ public class SecurityConfig {
             // /me는 인증 필요 — 타인 프로필(/profiles/{userId})보다 먼저 매칭해야 한다
             .requestMatchers("/api/v1/profiles/me").authenticated()
             .requestMatchers(HttpMethod.GET, "/api/v1/profiles/*").permitAll()
-            // 게시판 생성/수정/삭제는 ADMIN 전용. "/api/v1/boards/*"는 추가 세그먼트 없는 경로만 매칭하므로
-            // "/api/v1/boards/{boardId}/posts"(게시글)는 여기에 걸리지 않는다.
-            .requestMatchers(HttpMethod.POST, "/api/v1/boards").hasRole(Role.ADMIN.name())
-            .requestMatchers(HttpMethod.PUT, "/api/v1/boards/*").hasRole(Role.ADMIN.name())
-            .requestMatchers(HttpMethod.DELETE, "/api/v1/boards/*").hasRole(Role.ADMIN.name())
+            // 단계 6: board 생성/수정/삭제의 ADMIN 인가는 BoardController의 @PreAuthorize("hasRole('ADMIN')")로 이동.
+            // 공개 GET 규칙과 anyRequest().authenticated()는 유지 → 비로그인은 401, 로그인 USER는 @PreAuthorize가 403.
             .anyRequest().authenticated())
         // 401/403을 우리 ErrorResponse JSON으로 응답
         .exceptionHandling(e -> e

@@ -4,6 +4,7 @@ import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -76,6 +77,15 @@ public class GlobalExceptionHandler {
     log.warn("Unsupported media type: {}", e.getContentType());
     return ResponseEntity.status(ErrorCode.UNSUPPORTED_MEDIA_TYPE.getStatus())
         .body(ErrorResponse.of(ErrorCode.UNSUPPORTED_MEDIA_TYPE));
+  }
+
+  // 단계 6: @PreAuthorize 거부는 컨트롤러 진입 시점에 AuthorizationDeniedException(AccessDeniedException의 하위)을
+  // 던지므로 RestAccessDeniedHandler(필터 단계)가 아닌 여기서 잡힌다. 403 ACCESS_DENIED로 일원화한다.
+  @ExceptionHandler(AccessDeniedException.class)
+  public ResponseEntity<ErrorResponse> handleAccessDenied(AccessDeniedException e) {
+    log.warn("Access denied: {}", e.getMessage());
+    return ResponseEntity.status(ErrorCode.ACCESS_DENIED.getStatus())
+        .body(ErrorResponse.of(ErrorCode.ACCESS_DENIED));
   }
 
   // 예상하지 못한 예외는 상세를 숨기고 로그만 남긴다 (보안상 내부 정보 노출 금지)

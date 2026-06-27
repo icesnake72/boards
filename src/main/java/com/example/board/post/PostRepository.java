@@ -16,4 +16,8 @@ public interface PostRepository extends JpaRepository<Post, Long> {
 
   @Query("select p from Post p join fetch p.board join fetch p.author where p.id = :id")
   Optional<Post> findDetailById(@Param("id") Long id);
+
+  // 메서드 보안(@postSecurity.isAuthor)용 — 작성자 id만 가볍게 조회(엔티티 로딩 없이 소유권 판단)
+  @Query("select p.author.id from Post p where p.id = :id")
+  Optional<Long> findAuthorIdById(@Param("id") Long id);
 }

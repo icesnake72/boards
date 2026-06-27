@@ -3,7 +3,6 @@ package com.example.board.post;
 import com.example.board.board.Board;
 import com.example.board.board.BoardRepository;
 import com.example.board.global.exception.ErrorCode;
-import com.example.board.global.exception.ForbiddenException;
 import com.example.board.global.exception.NotFoundException;
 import com.example.board.post.dto.PostCreateRequest;
 import com.example.board.post.dto.PostListResponse;
@@ -51,29 +50,22 @@ public class PostService {
     return PostResponse.from(post);
   }
 
+  // 단계 6: 작성자 검사(권한)는 컨트롤러의 @PreAuthorize(@postSecurity)로 이동.
+  // 서비스는 비즈니스 로직(조회/수정)만 담당한다.
   @Transactional
-  public PostResponse update(Long id, Long loginUserId, PostUpdateRequest request) {
+  public PostResponse update(Long id, PostUpdateRequest request) {
     Post post = findPost(id);
-    validateAuthor(post, loginUserId);
     post.update(request.title(), request.content());
     return PostResponse.from(post);
   }
 
   @Transactional
-  public void delete(Long id, Long loginUserId) {
-    Post post = findPost(id);
-    validateAuthor(post, loginUserId);
-    postRepository.delete(post);
+  public void delete(Long id) {
+    postRepository.delete(findPost(id));
   }
 
   private Post findPost(Long id) {
     return postRepository.findDetailById(id)
         .orElseThrow(() -> new NotFoundException(ErrorCode.POST_NOT_FOUND));
-  }
-
-  private void validateAuthor(Post post, Long userId) {
-    if (!post.isAuthor(userId)) {
-      throw new ForbiddenException(ErrorCode.POST_ACCESS_DENIED);
-    }
   }
 }

@@ -18,6 +18,7 @@ public enum ErrorCode {
   DUPLICATE_BOARD_NAME(HttpStatus.CONFLICT, "이미 존재하는 게시판 이름입니다."),
   NICKNAME_DUPLICATED(HttpStatus.CONFLICT, "이미 사용 중인 nickname입니다."),
 
+  // 단계 6에서 작성자 거부가 메서드 보안(@PreAuthorize)로 이동하며 ACCESS_DENIED로 통합됨. 미사용이나 보존.
   POST_ACCESS_DENIED(HttpStatus.FORBIDDEN, "게시글에 대한 권한이 없습니다."),
   ACCESS_DENIED(HttpStatus.FORBIDDEN, "접근 권한이 없습니다."),
 
