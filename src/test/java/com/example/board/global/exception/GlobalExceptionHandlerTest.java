@@ -61,6 +61,15 @@ class GlobalExceptionHandlerTest {
         .andExpect(jsonPath("$.code").value("TYPE_MISMATCH"));
   }
 
+  // 단계 7에서 발견된 허점의 회귀 테스트 — 매핑 없는 URL(오타 등)은 500이 아니라 404여야 한다.
+  // permitAll 경로여야 Security(401)에 막히지 않고 MVC까지 도달해 NoResourceFoundException이 난다.
+  @Test
+  void should_return404ResourceNotFound_whenPathHasNoHandler() throws Exception {
+    mockMvc.perform(get("/api/oauth/kakao"))
+        .andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+  }
+
   @Test
   void should_return405MethodNotAllowed_whenUnsupportedHttpMethod() throws Exception {
     mockMvc.perform(delete("/api/v1/auth/login"))

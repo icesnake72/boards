@@ -12,6 +12,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @Slf4j
 @RestControllerAdvice
@@ -86,6 +87,15 @@ public class GlobalExceptionHandler {
     log.warn("Access denied: {}", e.getMessage());
     return ResponseEntity.status(ErrorCode.ACCESS_DENIED.getStatus())
         .body(ErrorResponse.of(ErrorCode.ACCESS_DENIED));
+  }
+
+  // 매핑된 핸들러가 없는 경로는 정적 리소스 탐색까지 실패한 뒤 이 예외로 온다 (Spring 6.1+).
+  // 이 핸들러가 없으면 최후 방어선(Exception → 500)에 걸려 단순 오타 URL이 500 + ERROR 스택트레이스가 된다.
+  @ExceptionHandler(NoResourceFoundException.class)
+  public ResponseEntity<ErrorResponse> handleNoResourceFound(NoResourceFoundException e) {
+    log.warn("No handler for path: {}", e.getResourcePath());
+    return ResponseEntity.status(ErrorCode.RESOURCE_NOT_FOUND.getStatus())
+        .body(ErrorResponse.of(ErrorCode.RESOURCE_NOT_FOUND));
   }
 
   // 예상하지 못한 예외는 상세를 숨기고 로그만 남긴다 (보안상 내부 정보 노출 금지)
