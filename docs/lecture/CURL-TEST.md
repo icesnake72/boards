@@ -372,6 +372,9 @@ curl -i -X POST $B/auth/login \
 | 중복 | 409 | `DUPLICATE_*` / `NICKNAME_DUPLICATED` |
 | 미지원 미디어 타입 | 415 | `UNSUPPORTED_MEDIA_TYPE` |
 | 예상치 못한 서버 오류 | 500 | `INTERNAL_ERROR` |
+| OAuth state 불일치 (단계 7) | 401 | `INVALID_OAUTH_STATE` |
+| 카카오 인가/토큰 교환 실패 (단계 7) | 401 | `OAUTH_LOGIN_FAILED` |
+| 매핑 없는 경로 (단계 7 보강) | 404 | `RESOURCE_NOT_FOUND` |
 
 ---
 
@@ -396,6 +399,107 @@ curl -s -X POST $B/boards -H "Authorization: Bearer $ADMIN" -H "Content-Type: ap
 curl -s -X POST $B/boards/1/posts -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"title":"제목","content":"내용"}'
 curl -s "$B/boards/1/posts?page=0&size=10"
+```
+
+---
+
+## 10. 단계 7 — 카카오 OAuth2 로그인 (브라우저 + curl)
+
+> **전제**: 프로젝트 루트에 `.env`(카카오 REST API 키/Secret)가 있어야 한다 — 없으면 기동 자체가 실패한다(fail-fast, `.env.example` 참고). 카카오 콘솔에 Redirect URI `http://localhost:8090/api/oauth/kakao/callback` 등록도 필수.
+
+OAuth 경로는 `/api/v1`이 아니므로 변수를 따로 둔다:
+
+```bash
+O=http://localhost:8090/api/oauth/kakao
+```
+
+### 10-1. 왜 curl만으로는 안 되나
+
+전체 흐름 중 **④(카카오 로그인/동의 화면)는 사람이 브라우저에서 통과해야 한다.** curl은 그 앞(302 관찰)과 뒤(발급된 토큰 사용, 실패 케이스)를 검증하는 데 쓴다.
+
+### 10-2. 로그인 시작을 curl로 관찰 — 302 + state 쿠키
+
+```bash
+curl -si $O/login | grep -iE "^(HTTP|location|set-cookie)"
+```
+
+**기대**: `302` — Location은 카카오 인가 URL, state 쿠키가 함께 심긴다.
+
+```
+HTTP/1.1 302
+Location: https://kauth.kakao.com/oauth/authorize?client_id=...&redirect_uri=...&response_type=code&state=<uuid>
+Set-Cookie: oauthState=<uuid>; Path=/api/oauth/kakao; Max-Age=300; HttpOnly; SameSite=Lax
+```
+
+> **관찰 포인트**: Location의 `state`와 쿠키의 `oauthState`가 **같은 값**이다(콜백에서 대조할 쌍). 쿠키가 `SameSite=Lax`인 이유는 콜백이 카카오發 크로스 사이트 이동이기 때문 — refresh 쿠키(Strict)와 비교해 보라.
+
+### 10-3. 실제 로그인 (브라우저 필수)
+
+```
+1. 브라우저에서 http://localhost:8090/api/oauth/kakao/login 접속
+2. 카카오 로그인/동의 → JSON 응답: {"accessToken":"eyJ...","tokenType":"Bearer","expiresIn":3600}
+3. accessToken 값을 복사해 셸 변수로:
+   KAKAO=eyJ...   (붙여넣기)
+```
+
+### 10-4. 발급된 토큰으로 API 호출 — 로컬 로그인과 동일하게 동작
+
+```bash
+curl -i -H "Authorization: Bearer $KAKAO" $B/profiles/me
+```
+
+**기대**: `200 OK` — username이 `kakao_{회원번호}`, 닉네임은 카카오 프로필 닉네임.
+
+```json
+{"userId":19,"username":"kakao_4614955682","email":"...","nickname":"김은범", ...}
+```
+
+DB 확인:
+
+```bash
+mysql -h127.0.0.1 -uroot -p1234 board \
+  -e "SELECT username, provider, provider_id FROM users WHERE provider='KAKAO';"
+```
+
+### 10-5. 실패 케이스 (curl로 검증 가능)
+
+```bash
+# (a) state 쿠키 없이 콜백 → 401 INVALID_OAUTH_STATE (CSRF 방어 동작)
+curl -i "$O/callback?code=fake&state=x"
+
+# (b) 사용자가 동의 화면에서 [취소] → 카카오가 error 파라미터로 돌려보낸다 → 401
+curl -i "$O/callback?error=access_denied&error_description=User%20denied"
+
+# (c) state는 통과했지만 가짜 code → 카카오 토큰 교환 실패 → 401
+#     (쿠키와 파라미터에 같은 값을 넣어 state 검증을 통과시키는 트릭)
+curl -i --cookie "oauthState=abc" "$O/callback?code=fake-code&state=abc"
+
+# (d) 오타 URL (/login 누락) → 404
+curl -i $O
+```
+
+**기대**:
+
+| 케이스 | 상태 | code |
+|--------|------|------|
+| (a) state 불일치/쿠키 없음 | 401 | `INVALID_OAUTH_STATE` |
+| (b) 동의 거부 (error 파라미터) | 401 | `OAUTH_LOGIN_FAILED` |
+| (c) 가짜/만료 code | 401 | `OAUTH_LOGIN_FAILED` |
+| (d) 매핑 없는 경로 | 404 | `RESOURCE_NOT_FOUND` |
+
+> (b)와 (c)가 같은 `OAUTH_LOGIN_FAILED`로 응답하는 것은 의도다 — 세부 사유는 서버 로그에만 남기고 밖으로는 노출하지 않는다. (c)를 반복 실행하면 서버 로그에서 "카카오 token 요청 실패"를 확인할 수 있다.
+
+### 10-6. 재발급/로그아웃 — 브라우저에서
+
+refresh token은 httpOnly 쿠키라 **curl은 값을 알 수 없다**(그게 목적이다). 로그인했던 브라우저의 개발자도구 콘솔에서:
+
+```javascript
+// 재발급 — 쿠키는 브라우저가 자동 동봉
+await fetch('/api/v1/auth/reissue', {method: 'POST'}).then(r => r.json())
+// → {accessToken: "eyJ...", tokenType: "Bearer", expiresIn: 3600}
+
+// 로그아웃 — 서버 DB의 refresh 삭제 + 쿠키 만료
+await fetch('/api/v1/auth/logout', {method: 'POST'}).then(r => r.status)  // 204
 ```
 
 ---

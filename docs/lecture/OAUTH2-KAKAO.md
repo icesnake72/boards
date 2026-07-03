@@ -184,14 +184,18 @@ public class KakaoUserResponse {
   private String email;     // kakao_account.email
   private String nickname;  // kakao_account.profile.nickname
 
-  // Jackson이 "kakao_account" 항목을 만나면 이 메서드에 Map으로 넘겨준다 — 중첩을 여기서 푼다
+  // Jackson이 "kakao_account" 항목을 만나면 이 메서드에 Map으로 넘겨준다 — 중첩을 여기서 푼다.
+  // 동의 항목이 없으면 각 단계의 값이 null일 수 있어, 한 단계씩 확인하며 내려간다.
   @JsonProperty("kakao_account")
   private void unpackKakaoAccount(Map<String, Object> kakaoAccount) {
     if (kakaoAccount == null) return;
+
     this.email = (String) kakaoAccount.get("email");
-    if (kakaoAccount.get("profile") instanceof Map<?, ?> profile) {
-      this.nickname = (String) profile.get("nickname");
-    }
+
+    Object profileValue = kakaoAccount.get("profile");
+    if (profileValue == null) return;
+    Map<?, ?> profile = (Map<?, ?>) profileValue;  // {"nickname": "..."} 형태의 Map
+    this.nickname = (String) profile.get("nickname");
   }
 }
 ```

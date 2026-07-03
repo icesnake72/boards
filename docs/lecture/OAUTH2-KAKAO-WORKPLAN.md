@@ -69,8 +69,8 @@
    UPDATE users SET provider = 'LOCAL' WHERE provider_id IS NULL;
    ```
    (providerId가 없으면 로컬 가입자다 — 이 조건이 안전하다)
-4. **[권장] 실키 env 전환** — yaml 기본값의 REST API 키/Secret은 git에 노출된다. `KAKAO_REST_API`/`KAKAO_SECRET` 환경변수로 옮기고, 공개 저장소라면 콘솔에서 Secret 재발급.
-5. **[권장] CURL-TEST.md에 단계 7 절 추가** — 브라우저 시작 + curl 후속 검증 시나리오.
+4. ~~[권장] 실키 env 전환~~ ✅ 완료 (2026-07-04) — `.env` + `spring.config.import` 로드, Secret 재발급, yaml 기본값 제거, 기동 시점 검증(fail-fast) 추가.
+5. ~~[권장] CURL-TEST.md에 단계 7 절 추가~~ ✅ 완료 (2026-07-04) — §10: 302/state 관찰, 브라우저 로그인, 실패 케이스 4종(모두 실행 검증), httpOnly 재발급.
 6. **[선택] 강의 PPT 제작** — 기존 패턴(단계별 .pptx). `OAUTH2-KAKAO.md`의 2장(흐름도)·6장(보안 포인트)이 슬라이드 핵심.
 7. **[선택] 커밋 분리** — 기존 관례대로: `feat: 카카오 OAuth2 로그인 추가 (단계 7)` → `docs: 단계 7 강의 문서 추가`.
 
