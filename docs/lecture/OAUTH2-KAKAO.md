@@ -1,10 +1,10 @@
 # OAuth 2.0 — 카카오 로그인 수동 구현 (단계 7)
 
-**과정명**: 강의용 Spring Boot 게시판 — 단계 7 (OAuth 2.0 / 카카오)
-**대상**: 단계 6(메서드 보안)을 마친 수강생
-**브랜치**: `step7-oauth2-kakao`
-**관련 코드**: `auth/oauth/` 패키지 전체, `user/AuthProvider.java`, `user/User.java`, `auth/AuthService.java`, `global/config/SecurityConfig.java`
-**선수 지식**: [SPRING-SECURITY-STANDARD.md](SPRING-SECURITY-STANDARD.md), [REFRESH-TOKEN.md](REFRESH-TOKEN.md), [HTTPONLY-COOKIE.md](HTTPONLY-COOKIE.md)
+- **과정명**: 강의용 Spring Boot 게시판 — 단계 7 (OAuth 2.0 / 카카오)
+- **대상**: 단계 6(메서드 보안)을 마친 수강생
+- **브랜치**: `step7-oauth2-kakao`
+- **관련 코드**: `auth/oauth/` 패키지 전체, `user/AuthProvider.java`, `user/User.java`, `auth/AuthService.java`, `global/config/SecurityConfig.java`
+- **선수 지식**: [SPRING-SECURITY-STANDARD.md](SPRING-SECURITY-STANDARD.md), [REFRESH-TOKEN.md](REFRESH-TOKEN.md), [HTTPONLY-COOKIE.md](HTTPONLY-COOKIE.md)
 
 ---
 
@@ -108,17 +108,33 @@ app:
       user-info-uri: https://kapi.kakao.com/v2/user/me         # 서버 간 호출
 ```
 
-바인딩은 `@Value` 여섯 줄 대신 **타입 세이프 record**로:
+바인딩은 `@Value` 여섯 줄 대신 **타입 세이프한 불변 클래스**로:
 
 ```java
+@Getter
+@RequiredArgsConstructor
 @ConfigurationProperties(prefix = "app.oauth.kakao")
-public record KakaoOAuthProperties(
-    String appkey, String secret, String callback,
-    String authorizeUri, String tokenUri, String userInfoUri) {
+public class KakaoOAuthProperties {
+
+  private final String appkey;
+  private final String secret;
+  // ... (callback, authorizeUri, tokenUri, userInfoUri)
+
+  // Lombok 생성자에는 검증을 못 넣으므로 바인딩 직후 실행되는 @PostConstruct에서 fail-fast (아래 참고)
+  @PostConstruct
+  void validate() {
+    requireResolved("appkey(KAKAO_REST_API)", appkey);
+    // ...
+  }
 }
 ```
 
-`BoardApplication`의 `@ConfigurationPropertiesScan`이 이 record를 빈으로 등록한다. kebab-case(`authorize-uri`) → camelCase(`authorizeUri`) 변환은 relaxed binding이 자동으로 한다.
+- `@RequiredArgsConstructor`가 final 필드 6개짜리 생성자를 만들고, **유일한 생성자**라 Boot 3가 생성자 바인딩을 적용한다
+- 단, 생성자 바인딩은 **파라미터 이름**에 의존한다 — `-parameters` 컴파일 옵션이 전제 (이 프로젝트는 단계 6의 SpEL `#id` 때문에 이미 켜져 있다. 없으면 "Failed to bind" 에러)
+
+`BoardApplication`의 `@ConfigurationPropertiesScan`이 이 클래스를 빈으로 등록한다. kebab-case(`authorize-uri`) → camelCase(`authorizeUri`) 변환은 relaxed binding이 자동으로 한다.
+
+> **함정 — 해석 안 된 placeholder는 조용히 통과한다**: `@Value("${KAKAO_SECRET}")`는 값이 없으면 기동 즉시 실패하지만, `@ConfigurationProperties` 바인딩은 `"${KAKAO_SECRET}"`라는 **문자열 그대로** 바인딩하고 넘어간다. 그대로 두면 `.env` 없이도 기동은 되고 첫 로그인 요청에서야 500이 터진다. 그래서 생성자에서 null/빈 값/`${` 포함 여부를 검증해 **기동 시점에 즉시 실패(fail-fast)** 시킨다. (`@NotBlank`로는 못 잡는다 — `"${KAKAO_SECRET}"`는 blank가 아니다.)
 
 > **보안 주의**: 실제 키를 yaml 기본값에 두면 git 히스토리에 영원히 남는다. 강의 편의로 넣더라도, 공개 저장소라면 반드시 환경변수(`KAKAO_SECRET=...`)로 옮기고 콘솔에서 키를 재발급하라.
 
