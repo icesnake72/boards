@@ -32,14 +32,20 @@ public class KakaoUserResponse {
 
   // Jackson이 "kakao_account" 항목을 만나면 이 메서드에 Map으로 넘겨준다.
   // 중첩 JSON을 평면 필드로 풀어주는 관용 패턴 — DTO 밖에서는 중첩을 몰라도 된다.
+  // 동의 항목이 없으면 각 단계의 값이 null일 수 있어, 한 단계씩 확인하며 내려간다.
   @JsonProperty("kakao_account")
   private void unpackKakaoAccount(Map<String, Object> kakaoAccount) {
     if (kakaoAccount == null) {
-      return;
+      return;  // kakao_account 자체가 없으면 email/nickname 모두 null로 남는다
     }
+
     this.email = (String) kakaoAccount.get("email");
-    if (kakaoAccount.get("profile") instanceof Map<?, ?> profile) {
-      this.nickname = (String) profile.get("nickname");
+
+    Object profileValue = kakaoAccount.get("profile");
+    if (profileValue == null) {
+      return;  // 프로필 동의 항목이 없으면 nickname은 null로 남는다
     }
+    Map<?, ?> profile = (Map<?, ?>) profileValue;  // profile은 {"nickname": "..."} 형태의 Map
+    this.nickname = (String) profile.get("nickname");
   }
 }
