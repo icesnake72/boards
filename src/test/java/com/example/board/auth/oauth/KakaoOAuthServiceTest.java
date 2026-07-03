@@ -54,8 +54,7 @@ class KakaoOAuthServiceTest {
     given(kakaoOAuthClient.requestToken("test-code")).willReturn(
         new KakaoTokenResponse("kakao-access", "bearer", "kakao-refresh", 21599L, "profile"));
     given(kakaoOAuthClient.fetchUser("kakao-access")).willReturn(
-        new KakaoUserResponse(KAKAO_ID, new KakaoUserResponse.KakaoAccount(
-            email, new KakaoUserResponse.KakaoAccount.Profile(nickname))));
+        new KakaoUserResponse(KAKAO_ID, email, nickname));
   }
 
   @Test

@@ -79,7 +79,7 @@ public class KakaoOAuthClient {
           .header(HttpHeaders.AUTHORIZATION, "Bearer " + kakaoAccessToken)
           .retrieve()
           .body(KakaoUserResponse.class);
-      if (response == null || response.id() == null) {
+      if (response == null || response.getId() == null) {
         log.warn("카카오 사용자 응답에 id 없음");
         throw new UnauthorizedException(ErrorCode.OAUTH_LOGIN_FAILED);
       }

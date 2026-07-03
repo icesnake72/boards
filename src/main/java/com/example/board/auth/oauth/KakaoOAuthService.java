@@ -51,7 +51,7 @@ public class KakaoOAuthService {
 
   // (provider, providerId)로 찾고 없으면 가입 — 소셜 로그인의 "로그인과 가입이 하나"인 지점
   private User findOrCreateUser(KakaoUserResponse kakaoUser) {
-    String providerId = String.valueOf(kakaoUser.id());
+    String providerId = String.valueOf(kakaoUser.getId());
     return userRepository.findByProviderAndProviderId(AuthProvider.KAKAO, providerId)
         .orElseGet(() -> createUser(kakaoUser, providerId));
   }
@@ -61,7 +61,7 @@ public class KakaoOAuthService {
 
     // 이메일 동의 항목이 없으면 null, 기존 로컬 계정과 겹치면 unique 위반 —
     // 두 경우 모두 시스템 생성 대체 이메일로 채운다 (로컬-소셜 계정 연동은 후속 주제)
-    String email = kakaoUser.email();
+    String email = kakaoUser.getEmail();
     if (email == null || userRepository.existsByEmail(email)) {
       email = username + "@kakao.local";
     }
@@ -73,7 +73,7 @@ public class KakaoOAuthService {
     User user = userRepository.save(
         new User(username, email, password, Role.USER, AuthProvider.KAKAO, providerId));
     userProfileRepository.save(
-        new UserProfile(user, uniqueNickname(kakaoUser.nickname(), providerId), null));
+        new UserProfile(user, uniqueNickname(kakaoUser.getNickname(), providerId), null));
     log.info("카카오 신규 사용자 가입: username={}", username);
     return user;
   }
