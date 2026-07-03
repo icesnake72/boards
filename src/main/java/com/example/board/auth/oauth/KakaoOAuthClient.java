@@ -4,6 +4,7 @@ import com.example.board.auth.oauth.dto.KakaoTokenResponse;
 import com.example.board.auth.oauth.dto.KakaoUserResponse;
 import com.example.board.global.exception.ErrorCode;
 import com.example.board.global.exception.UnauthorizedException;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -20,16 +21,12 @@ import org.springframework.web.util.UriComponentsBuilder;
 // 클라이언트에는 OAUTH_LOGIN_FAILED(401) 하나로 응답한다 — 내부 구성 정보를 노출하지 않는다.
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class KakaoOAuthClient {
 
+  // 둘 다 빈이므로(@ConfigurationProperties 스캔, RestClientConfig) 생성자 주입만으로 충분하다
   private final KakaoOAuthProperties properties;
   private final RestClient restClient;
-
-  public KakaoOAuthClient(KakaoOAuthProperties properties, RestClient.Builder restClientBuilder) {
-    this.properties = properties;
-    // Boot이 자동 구성한 Builder를 쓰면 앱의 ObjectMapper·메시지 컨버터 설정을 그대로 물려받는다
-    this.restClient = restClientBuilder.build();
-  }
 
   // 1단계(인가 요청) URL — 브라우저를 이 주소로 보내면 카카오 로그인/동의 화면이 뜬다
   public String authorizeUrl(String state) {
