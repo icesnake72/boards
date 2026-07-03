@@ -171,17 +171,32 @@ public KakaoTokenResponse requestToken(String code) {
 
 ### 5-2. DTO — 카카오 응답 매핑
 
-```java
-public record KakaoUserResponse(
-    Long id,                                          // 카카오 회원번호 (불변) → providerId
-    @JsonProperty("kakao_account") KakaoAccount kakaoAccount) {
+카카오의 실제 JSON은 중첩돼 있지만, DTO는 **평면 필드 3개**로 받는다:
 
-  public String nickname() { /* null-safe 헬퍼 */ }
-  public String email()    { /* 동의 안 했으면 null */ }
+```java
+// 실제 응답: { "id": 4242, "kakao_account": { "email": "..", "profile": { "nickname": ".." } } }
+@Getter
+@NoArgsConstructor
+public class KakaoUserResponse {
+
+  @JsonProperty("id")
+  private Long id;          // 카카오 회원번호(불변) → providerId
+  private String email;     // kakao_account.email
+  private String nickname;  // kakao_account.profile.nickname
+
+  // Jackson이 "kakao_account" 항목을 만나면 이 메서드에 Map으로 넘겨준다 — 중첩을 여기서 푼다
+  @JsonProperty("kakao_account")
+  private void unpackKakaoAccount(Map<String, Object> kakaoAccount) {
+    if (kakaoAccount == null) return;
+    this.email = (String) kakaoAccount.get("email");
+    if (kakaoAccount.get("profile") instanceof Map<?, ?> profile) {
+      this.nickname = (String) profile.get("nickname");
+    }
+  }
 }
 ```
 
-카카오는 snake_case로 응답하므로 `@JsonProperty`로 매핑한다. `kakao_account` 내부는 **동의 항목 설정에 따라 어디든 null**일 수 있어 null-safe 헬퍼를 뒀다.
+**강의 포인트 — "중첩 JSON, 평면 DTO" 패턴**: JSON 구조를 그대로 클래스 3개로 옮기면 DTO를 쓰는 쪽 모두가 중첩(`getKakaoAccount().getProfile().getNickname()`)과 그 각각의 null 가능성을 알아야 한다. `@JsonProperty`가 붙은 unpack 메서드가 역직렬화 시점에 필요한 값만 꺼내 담으면, **DTO 밖에서는 중첩의 존재 자체를 몰라도 된다**. email/nickname은 동의 항목 미설정이면 null일 수 있다 — `KakaoUserResponseTest`가 중첩 해체와 null 케이스를 검증한다.
 
 ### 5-3. `KakaoOAuthService` — 카카오 사용자 ↔ 우리 사용자 연결
 
