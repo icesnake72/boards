@@ -33,9 +33,9 @@ public class KakaoOAuthClient {
 
   // 1단계(인가 요청) URL — 브라우저를 이 주소로 보내면 카카오 로그인/동의 화면이 뜬다
   public String authorizeUrl(String state) {
-    String uri = UriComponentsBuilder.fromUriString(properties.authorizeUri())
-        .queryParam("client_id", properties.appkey())
-        .queryParam("redirect_uri", properties.callback())
+    String uri = UriComponentsBuilder.fromUriString(properties.getAuthorizeUri())
+        .queryParam("client_id", properties.getAppkey())
+        .queryParam("redirect_uri", properties.getCallback())
         .queryParam("response_type", "code")
         .queryParam("state", state)
         .build()
@@ -50,14 +50,14 @@ public class KakaoOAuthClient {
   public KakaoTokenResponse requestToken(String code) {
     MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
     form.add("grant_type", "authorization_code");
-    form.add("client_id", properties.appkey());
-    form.add("client_secret", properties.secret());
-    form.add("redirect_uri", properties.callback());  // 인가 요청 때와 같은 값이어야 카카오가 승인한다
+    form.add("client_id", properties.getAppkey());
+    form.add("client_secret", properties.getSecret());
+    form.add("redirect_uri", properties.getCallback());  // 인가 요청 때와 같은 값이어야 카카오가 승인한다
     form.add("code", code);
 
     try {
       KakaoTokenResponse response = restClient.post()
-          .uri(properties.tokenUri())
+          .uri(properties.getTokenUri())
           .contentType(MediaType.APPLICATION_FORM_URLENCODED)
           .body(form)
           .retrieve()
@@ -78,7 +78,7 @@ public class KakaoOAuthClient {
   public KakaoUserResponse fetchUser(String kakaoAccessToken) {
     try {
       KakaoUserResponse response = restClient.get()
-          .uri(properties.userInfoUri())
+          .uri(properties.getUserInfoUri())
           .header(HttpHeaders.AUTHORIZATION, "Bearer " + kakaoAccessToken)
           .retrieve()
           .body(KakaoUserResponse.class);
