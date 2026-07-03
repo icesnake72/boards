@@ -4,6 +4,11 @@ server:
 spring:
   application:
     name: board
+  config:
+    # .env 파일을 properties 형식으로 로드한다 (optional: 없어도 기동은 됨).
+    # KEY=VALUE 줄이 그대로 프로퍼티가 되어 ${KAKAO_SECRET} 같은 placeholder가 해석된다.
+    # 같은 이름의 OS 환경변수가 있으면 그쪽이 우선한다.
+    import: optional:file:.env[.properties]
   datasource:
     url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:board}?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
     username: ${DB_USERNAME:root}
@@ -36,10 +41,12 @@ app:
   # 단계 7: 카카오 OAuth2 (authorization code 수동 구현)
   oauth:
     kakao:
-      # REST API Key — 실키를 yaml 기본값에 두면 git에 노출된다. 커밋 전 env 주입으로 전환 권장.
-      appkey: ${KAKAO_REST_API:f0bfa98dfa477735feeb8dbfdfa1d105}
-      # Client Secret Key — 카카오 콘솔의 [보안]에서 '사용함' 상태여야 token 요청에 필수로 검사된다
-      secret: ${KAKAO_SECRET:U4JgTAZGirCvVGmmnvuSlsoWlKFPstvV}
+      # REST API Key(client_id) — 인가 URL에 노출되는 값이라 비밀은 아니지만, .env로 관리한다
+      appkey: ${KAKAO_REST_API}
+      # Client Secret — 진짜 비밀값. yaml에 기본값을 두지 않는다(.env 또는 환경변수 필수).
+      # 해석 안 된 placeholder는 "${KAKAO_SECRET}" 문자열 그대로 바인딩되므로(!),
+      # KakaoOAuthProperties의 compact constructor가 기동 시점에 검증해 즉시 실패시킨다(fail-fast).
+      secret: ${KAKAO_SECRET}
       # CALL BACK REDIRECT URI — 카카오 콘솔 [카카오 로그인 > Redirect URI]에 "완전히 동일한 문자열"로 등록 필수
       callback: ${KAKAO_CALLBACK:http://localhost:8090/api/oauth/kakao/callback}
       # 카카오 고정 엔드포인트 — 인가(브라우저 리다이렉트) / 토큰 교환(서버) / 사용자 정보(서버)
