@@ -33,6 +33,21 @@ app:
     # reissue/logout 모두 이 경로 아래라 쿠키가 전송된다. 노출 면적을 auth 경로로 좁힌다.
     path: /api/v1/auth
 
+  # 단계 7: 카카오 OAuth2 (authorization code 수동 구현)
+  oauth:
+    kakao:
+      # REST API Key — 실키를 yaml 기본값에 두면 git에 노출된다. 커밋 전 env 주입으로 전환 권장.
+      appkey: ${KAKAO_REST_API:f0bfa98dfa477735feeb8dbfdfa1d105}
+      # Client Secret Key — 카카오 콘솔의 [보안]에서 '사용함' 상태여야 token 요청에 필수로 검사된다
+      secret: ${KAKAO_SECRET:U4JgTAZGirCvVGmmnvuSlsoWlKFPstvV}
+      # CALL BACK REDIRECT URI — 카카오 콘솔 [카카오 로그인 > Redirect URI]에 "완전히 동일한 문자열"로 등록 필수
+      callback: ${KAKAO_CALLBACK:http://localhost:8090/api/oauth/kakao/callback}
+      # 카카오 고정 엔드포인트 — 인가(브라우저 리다이렉트) / 토큰 교환(서버) / 사용자 정보(서버)
+      authorize-uri: https://kauth.kakao.com/oauth/authorize
+      token-uri: https://kauth.kakao.com/oauth/token
+      user-info-uri: https://kapi.kakao.com/v2/user/me
+
+
 logging:
   level:
     org.hibernate.SQL: debug

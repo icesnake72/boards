@@ -62,6 +62,8 @@ public class SecurityConfig {
         .authorizeHttpRequests(auth -> auth
             // 공개: 인증/회원가입(로그아웃 포함 — stateless라 인증 불필요), 게시판·게시글 조회
             .requestMatchers("/api/v1/auth/**").permitAll()
+            // 단계 7: 카카오 OAuth2 — 로그인 전 단계이므로 당연히 공개. 콜백은 카카오發 리다이렉트로 들어온다.
+            .requestMatchers("/api/oauth/**").permitAll()
             .requestMatchers(HttpMethod.GET, "/api/v1/boards/**").permitAll()
             .requestMatchers(HttpMethod.GET, "/api/v1/posts/**").permitAll()
             // /me는 인증 필요 — 타인 프로필(/profiles/{userId})보다 먼저 매칭해야 한다

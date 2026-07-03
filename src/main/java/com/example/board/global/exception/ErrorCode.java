@@ -12,6 +12,8 @@ public enum ErrorCode {
   PROFILE_NOT_FOUND(HttpStatus.NOT_FOUND, "프로필을 찾을 수 없습니다."),
   BOARD_NOT_FOUND(HttpStatus.NOT_FOUND, "게시판을 찾을 수 없습니다."),
   POST_NOT_FOUND(HttpStatus.NOT_FOUND, "게시글을 찾을 수 없습니다."),
+  // 단계 7에서 발견: 매핑 없는 URL이 500으로 새던 것을 404로 교정 (NoResourceFoundException 핸들러)
+  RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "요청한 경로를 찾을 수 없습니다."),
 
   DUPLICATE_USERNAME(HttpStatus.CONFLICT, "이미 사용 중인 username입니다."),
   DUPLICATE_EMAIL(HttpStatus.CONFLICT, "이미 사용 중인 email입니다."),
@@ -21,6 +23,10 @@ public enum ErrorCode {
   // 단계 6에서 작성자 거부가 메서드 보안(@PreAuthorize)로 이동하며 ACCESS_DENIED로 통합됨. 미사용이나 보존.
   POST_ACCESS_DENIED(HttpStatus.FORBIDDEN, "게시글에 대한 권한이 없습니다."),
   ACCESS_DENIED(HttpStatus.FORBIDDEN, "접근 권한이 없습니다."),
+
+  // 단계 7: 카카오 OAuth2 — 토큰 교환/사용자 정보 조회 실패, 동의 거부 등을 한 코드로 묶는다(내부 사유는 서버 로그로)
+  OAUTH_LOGIN_FAILED(HttpStatus.UNAUTHORIZED, "소셜 로그인에 실패했습니다."),
+  INVALID_OAUTH_STATE(HttpStatus.UNAUTHORIZED, "OAuth state 검증에 실패했습니다. 처음부터 다시 시도하세요."),
 
   LOGIN_REQUIRED(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다."),
   LOGIN_FAILED(HttpStatus.UNAUTHORIZED, "username 또는 password가 올바르지 않습니다."),

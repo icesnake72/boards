@@ -76,14 +76,25 @@ public class AuthService {
       Authentication authentication = authenticationManager.authenticate(
           new UsernamePasswordAuthenticationToken(request.username(), request.password()));
       CustomUserDetails principal = (CustomUserDetails) authentication.getPrincipal();
-      String accessToken = tokenProvider.createToken(principal.getUsername());
-      String refreshToken = issueRefreshToken(principal.getId());
       // 토큰 생성까지만 책임진다. 본문(access)·쿠키(refresh) 전달은 컨트롤러가 결정.
-      return new TokenPair(
-          accessToken, refreshToken, accessTokenValiditySeconds, refreshTokenValiditySeconds);
+      return createTokenPair(principal.getUsername(), principal.getId());
     } catch (AuthenticationException e) {
       throw new UnauthorizedException(ErrorCode.LOGIN_FAILED);
     }
+  }
+
+  // 단계 7: 인증 수단(로컬 password / 카카오 OAuth)과 무관하게 "인증이 끝난 사용자"에게 토큰 쌍을 발급한다.
+  // KakaoOAuthService가 재사용한다 — 발급 경로가 같으므로 이후 reissue/logout 흐름도 완전히 동일하다.
+  @Transactional
+  public TokenPair issueTokenPair(User user) {
+    return createTokenPair(user.getUsername(), user.getId());
+  }
+
+  private TokenPair createTokenPair(String username, Long userId) {
+    String accessToken = tokenProvider.createToken(username);
+    String refreshToken = issueRefreshToken(userId);
+    return new TokenPair(
+        accessToken, refreshToken, accessTokenValiditySeconds, refreshTokenValiditySeconds);
   }
 
   // 강의 포인트: refresh token으로는 새 access token만 재발급한다(stateful 검증).
