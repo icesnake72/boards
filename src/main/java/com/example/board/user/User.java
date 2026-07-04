@@ -13,6 +13,8 @@ import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(name = "users", uniqueConstraints = @UniqueConstraint(
@@ -39,9 +41,11 @@ public class User extends BaseTimeEntity {
   @Column(nullable = false, length = 20)
   private Role role;
 
-  // 단계 7: 가입 경로. 자체 가입은 LOCAL, 카카오 로그인은 KAKAO.
-  // 기존 테이블에 rows가 있다면 컬럼 추가 후 UPDATE users SET provider = 'LOCAL' 필요(작업 순서 문서 참고).
+  // 단계 7: 가입 경로. 자체 가입은 LOCAL, 소셜 로그인은 KAKAO/GOOGLE.
+  // 단계 8(구글 추가): MySQL 네이티브 ENUM 컬럼이면 제공자를 추가할 때마다 ALTER가 필요하므로
+  // VARCHAR로 저장한다 — 기존 DB는 1회 전환 필요: ALTER TABLE users MODIFY provider VARCHAR(20) NOT NULL;
   @Enumerated(EnumType.STRING)
+  @JdbcTypeCode(SqlTypes.VARCHAR)
   @Column(nullable = false, length = 20)
   private AuthProvider provider;
 

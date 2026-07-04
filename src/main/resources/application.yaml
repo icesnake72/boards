@@ -26,6 +26,13 @@ spring:
             # 카카오 token endpoint는 Basic 헤더가 아니라 form 본문의 client_id/secret을 요구한다
             client-authentication-method: client_secret_post
             scope: profile_nickname
+          # 단계 8 확장: 구글 — CommonOAuth2Provider에 내장이라 provider 블록이 필요 없다(카카오와의 대비).
+          # 주의: scope에 openid를 넣으면 OIDC 경로로 빠져 CustomOAuth2UserService를 타지 않는다 —
+          # 순수 OAuth2로 통일하기 위해 profile,email만 명시한다. user-name-attribute는 내장값 "sub".
+          google:
+            client-id: ${GOOGLE_CLIENT_ID}
+            client-secret: ${GOOGLE_CLIENT_SECRET}
+            scope: profile,email
         provider:
           kakao:
             authorization-uri: https://kauth.kakao.com/oauth/authorize
