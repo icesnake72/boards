@@ -66,12 +66,17 @@ public class CookieOAuth2AuthorizationRequestRepository
       return;
     }
     StoredRequest stored = new StoredRequest(
+        // CSRF 방어용 난수 — 콜백의 state 파라미터와 대조할 기준값 (예: "DeYsqi..." base64url)
         authorizationRequest.getState(),
+        // 인가 페이지 주소 — provider.kakao.authorization-uri (https://kauth.kakao.com/oauth/authorize)
         authorizationRequest.getAuthorizationUri(),
+        // 우리 앱의 client_id — registration.kakao.client-id (카카오 REST API 키)
         authorizationRequest.getClientId(),
+        // {baseUrl} 치환이 끝난 콜백 주소 — 토큰 교환 때 같은 값을 다시 보내야 카카오가 승인한다
         authorizationRequest.getRedirectUri(),
+        // 요청한 동의 항목 — registration.kakao.scope (예: [profile_nickname])
         authorizationRequest.getScopes(),
-        // 콜백에서 어느 registration(kakao)의 요청이었는지 복원하는 데 필요하다
+        // 어느 registration의 요청인지("kakao") — 콜백에서 설정을 다시 찾는 열쇠
         authorizationRequest.getAttribute(OAuth2ParameterNames.REGISTRATION_ID));
     try {
       String json = objectMapper.writeValueAsString(stored);

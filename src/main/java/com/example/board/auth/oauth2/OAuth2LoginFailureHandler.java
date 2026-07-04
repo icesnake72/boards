@@ -28,7 +28,9 @@ public class OAuth2LoginFailureHandler implements AuthenticationFailureHandler {
       HttpServletRequest request,
       HttpServletResponse response,
       AuthenticationException exception) throws IOException {
-    log.warn("OAuth 로그인 실패: {}", exception.getMessage());
+    // uri·쿼리까지 남겨야 "콜백을 파라미터 없이 직접 호출" 같은 원인을 로그만으로 구분할 수 있다
+    log.warn("OAuth 로그인 실패: {} (uri={}, query={})",
+        exception.getMessage(), request.getRequestURI(), request.getQueryString());
     ErrorCode errorCode = ErrorCode.OAUTH_LOGIN_FAILED;
     response.setStatus(errorCode.getStatus().value());
     response.setContentType(MediaType.APPLICATION_JSON_VALUE + ";charset=UTF-8");
