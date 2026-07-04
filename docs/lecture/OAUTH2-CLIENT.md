@@ -175,6 +175,23 @@ TokenPair tokens = authService.issueTokenPair(user);   // 단계 4~5 발급 경�
 
 기본 동작은 `/login?error` **리다이렉트** — 화면 없는 REST API에 맞지 않는다. 동의 거부·state 불일치·토큰 교환 실패 모두 `OAUTH_LOGIN_FAILED`(401) 한 코드로 응답하고 세부 사유는 로그로만 남긴다(단계 7과 같은 정책).
 
+### 5-5. 두 번째 제공자 추가 — 구글 (확장 비용의 실측)
+
+"제공자 추가가 설정으로 끝난다"(§1)를 구글로 실측했다. 실제로 든 비용 전부:
+
+| 변경 | 내용 |
+|------|------|
+| yaml | `registration.google` **3줄** (client-id/secret/scope) — 구글은 `CommonOAuth2Provider`에 내장이라 **provider 블록 불필요** (카카오와의 대비) |
+| `AuthProvider` | `GOOGLE` enum 상수 1개 |
+| `CustomOAuth2UserService` | `extractUserInfo`의 switch에 **분기 1개** — 구글은 평면 JSON(sub/email/name)이라 카카오(중첩)보다 단순 |
+| DB | `provider` 컬럼을 네이티브 ENUM → **VARCHAR 전환** (1회성) — ENUM이면 제공자마다 ALTER 필요했다 |
+
+건드리지 않은 것: 쿠키 저장소, SuccessHandler(registrationId로 이미 일반화돼 있었음), FailureHandler, SecurityConfig — **필터·핸들러는 제공자 수와 무관**하다. `/oauth2/authorization/google` 시작 주소도 자동으로 생긴다.
+
+**함정 — openid scope**: 구글 기본 scope에 `openid`가 있는데, 이걸 넣으면 **OIDC 경로**로 빠져 `OidcUserService`가 담당하게 되고 우리 `CustomOAuth2UserService`는 호출되지 않는다. 순수 OAuth2로 통일하려고 `scope: profile,email`만 명시했다. (OIDC 전환은 후속 주제)
+
+**동일 인물의 두 소셜 계정**: 카카오와 구글의 이메일이 같아도 **별도 계정**으로 생성된다(구글 쪽은 대체 이메일). 소유 확인 없는 이메일 기반 자동 연동은 계정 탈취 벡터이기 때문 — 단계 7부터의 정책 그대로이며, 테스트로 고정해 뒀다.
+
 ### SecurityConfig 조립
 
 ```java
@@ -278,7 +295,7 @@ public SecurityFilterChain securityFilterChain(
 |------|-----------|
 | STATELESS인데 oauth2Login이 되나? | 기본 state 저장소(세션)만 쿠키로 갈아끼우면 된다. 그게 `CookieOAuth2AuthorizationRequestRepository`. |
 | 왜 SuccessHandler에서 DB를 다시 조회하나? | 커스텀 principal(OAuth2User 구현체)을 만들면 조회 없이 가능하다. 클래스 수를 줄이는 쪽을 택했다 — `user-name-attribute: id` 덕에 `getName()`이 곧 providerId다. |
-| 네이버를 추가하려면? | yaml에 naver registration/provider 추가 + `AuthProvider.NAVER` + UserService에서 제공자별 attributes 파싱 분기. 네이버는 사용자 정보가 `response` 아래 중첩이라 `user-name-attribute: response`로 두고 내부에서 꺼낸다. |
+| 네이버를 추가하려면? | 구글 추가(§5-5)와 같은 4단계 — 단 네이버는 `CommonOAuth2Provider`에 없어 카카오처럼 provider 블록을 직접 쓰고, 사용자 정보가 `response` 아래 중첩이라 `user-name-attribute: response`로 두고 switch 분기에서 꺼낸다. |
 | 콜백 URL을 바꿀 수 있나? | `loginProcessingUrl`로 가능하지만 권장하지 않는다 — 표준 관례를 따르는 것이 표준화의 취지다. |
 | 수동 코드는 왜 아직 있나? | 병행 후 제거 전략의 마지막 단계(Phase F)가 남았다. 표준 경로 검증이 끝났으므로 제거해도 되는 상태 — 교재로서의 수동 구현은 step7 브랜치에 온전히 보존된다. |
 | 토큰 교환 실패는 어디서 보나? | FailureHandler가 401 한 코드로 응답하고, 원인(`invalid_client` 등 OAuth2 표준 에러 코드)은 서버 로그에 남는다. |

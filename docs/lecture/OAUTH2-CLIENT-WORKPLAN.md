@@ -102,7 +102,20 @@
 
 ---
 
-## 3. 리스크 / 주의
+## 3. 확장 — 구글 로그인 추가 (2026-07-05)
+
+| # | 작업 | 상태 |
+|---|------|------|
+| 1 | `AuthProvider.GOOGLE` + `CustomOAuth2UserService` 제공자 인식형 리팩토링 (`extractUserInfo` switch — 제공자별 응답 차이의 유일한 분기점) | ✅ |
+| 2 | yaml `registration.google` 3줄 (provider 블록 불필요 — CommonOAuth2Provider 내장). **openid 제외**: `scope: profile,email` (openid면 OIDC 경로로 빠져 우리 UserService를 안 탐) | ✅ |
+| 3 | DB `provider` 컬럼 ENUM → **VARCHAR 전환** (제공자 추가마다 ALTER 방지): 엔티티 `@JdbcTypeCode(SqlTypes.VARCHAR)` + 로컬 DB `ALTER TABLE users MODIFY provider VARCHAR(20) NOT NULL` 실행 완료 | ✅ |
+| 4 | 테스트 3개 추가(구글 신규/이메일 충돌 폴백/제공자별 분리) — 전체 73개 통과 | ✅ |
+| 5 | 서버 연결 확인 — `/oauth2/authorization/google` → accounts.google.com 302 (scope·콜백 정상), 카카오 두 경로 회귀 없음 | ✅ |
+| 6 | 실 E2E | ✅ (2026-07-05) — 계정 선택 → 동의 → 콜백 → JWT 응답. DB에 `google_{sub}` 사용자 생성(GOOGLE, 구글 프로필명 닉네임), **이메일 폴백 실증**(카카오 계정과 같은 gmail이라 `@google.local` 대체 — 자동 연동 안 함 정책이 실제로 발동), httpOnly reissue 200. 카카오 사용자와 병존 확인 |
+
+---
+
+## 4. 리스크 / 주의
 
 - **콘솔 Redirect URI 미등록** 상태로 E2E를 시도하면 단계 7과 동일한 KOE006 — Phase 0-1이 선행 조건.
 - **scope**: 수동 구현은 scope 파라미터를 아예 안 보냈지만(동의된 항목 기본 제공), 표준 클라이언트는 명시한 scope를 요청한다. 콘솔 동의 항목에 없는 scope를 넣으면 KOE에러 — `profile_nickname`부터 시작하고 email은 E2E에서 확인 후 조정.
