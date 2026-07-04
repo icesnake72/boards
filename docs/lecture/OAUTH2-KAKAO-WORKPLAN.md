@@ -90,7 +90,9 @@
 
 ---
 
-## 4. 단계 8 예고 (이번에 미룬 것)
+## 4. 다음 단계 (2026-07-04 확정)
 
-- **Refresh Token Rotation** — 재발급마다 refresh도 새로 발급 + 재사용 탐지 (`REFRESH-TOKEN.md`가 예고한 후속 주제)
-- 후보: 로컬-소셜 계정 연동, 네이버/구글 추가 → `spring-boot-starter-oauth2-client` 표준 전환
+- **단계 8 = OAuth 표준화** (`step8-oauth2-client` 브랜치) — 단계 7의 수동 구현(KakaoOAuthClient/Controller, state 쿠키)을 `spring-boot-starter-oauth2-client`의 표준 부품으로 대체한다. 단계 2→3(수동 JWT → Security 표준)과 같은 서사.
+  - 핵심 대응: `KakaoOAuthClient.fetchUser`+find-or-create → `CustomOAuth2UserService.loadUser` / 응답 처리 → `AuthenticationSuccessHandler` / state 쿠키 → 쿠키 기반 `AuthorizationRequestRepository`(STATELESS라 세션 기본값 사용 불가) / `app.oauth.kakao.*` → `spring.security.oauth2.client.*` 표준 프로퍼티
+  - 유지: find-or-create 로직(이사만), `AuthService.issueTokenPair`, `RefreshCookieFactory`
+- **단계 9 후보**: Refresh Token Rotation(재발급마다 refresh 재발급 + 재사용 탐지 — `REFRESH-TOKEN.md` 예고분), 로컬-소셜 계정 연동, 네이버/구글 추가
