@@ -73,18 +73,19 @@
 | 1 | 브라우저에서 `/oauth2/authorization/kakao` → 카카오 로그인 → JSON 응답/DB/reissue 확인 | ✅ (2026-07-04) — 콜백 `/login/oauth2/code/kakao` 도착, 기존 사용자 재사용(중복 없음), refresh 갱신, httpOnly reissue 200 |
 | 2 | 수동 경로(`/api/oauth/kakao/login`)도 여전히 동작하는지 비교 시연 | ✅ — 두 경로 병행 동작 확인 (state 형식 차이: 수동 UUID vs 표준 base64url) |
 
-### Phase F — 수동 구현 제거 (⚠️ 사용자 확인 후 진행)
+### Phase F — 수동 구현 제거 (⏸ 보류 — 2026-07-05 사용자 결정)
 | # | 작업 | 상태 |
 |---|------|------|
-| 1 | 삭제: `KakaoOAuthClient/Controller/Service/Properties`, `dto/KakaoTokenResponse`, `dto/KakaoUserResponse`, `RestClientConfig` (7파일) + 관련 테스트 3파일 | ⬜ |
-| 2 | `SecurityConfig`의 `/api/oauth/**` permitAll 제거, yaml의 `app.oauth.kakao.*` 제거 | ⬜ |
-| 3 | 전체 테스트 + 실 E2E 재확인 | ⬜ |
+| — | **단계 7 수동 구현을 학습 자료로 당분간 병행 유지하기로 결정.** 두 경로(수동/표준)를 비교 시연할 수 있는 상태를 보존한다. 제거는 사용자가 언급하는 시점에 아래 목록대로 진행 | ⏸ |
+| 1 | (보류) 삭제: `KakaoOAuthClient/Controller/Service/Properties`, `dto/KakaoTokenResponse`, `dto/KakaoUserResponse`, `RestClientConfig` (7파일) + 관련 테스트 3파일 | ⏸ |
+| 2 | (보류) `SecurityConfig`의 `/api/oauth/**` permitAll 제거, yaml의 `app.oauth.kakao.*` 제거 | ⏸ |
+| 3 | (보류) 전체 테스트 + 실 E2E 재확인 | ⏸ |
 
 ### Phase G — 문서
 | # | 작업 | 상태 |
 |---|------|------|
-| 1 | 강의 문서 `OAUTH2-CLIENT.md` (부품 대응, 자동으로 바뀐 것/여전히 우리가 만드는 것, FAQ) | ⬜ |
-| 2 | CURL-TEST.md 단계 8 반영 (경로 변경) | ⬜ |
+| 1 | 강의 문서 `OAUTH2-CLIENT.md` (부품 대응, 자동으로 바뀐 것/여전히 우리가 만드는 것, FAQ) | ✅ (2026-07-04) — Phase F 판단 자료를 겸해 F보다 먼저 작성. §8에 제거 예정 목록 명시 |
+| 2 | CURL-TEST.md 단계 8 반영 (경로 변경) | ⬜ (Phase F 후 최종 경로 기준으로) |
 
 ---
 
