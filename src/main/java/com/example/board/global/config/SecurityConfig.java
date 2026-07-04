@@ -1,6 +1,10 @@
 package com.example.board.global.config;
 
 import com.example.board.auth.jwt.JwtAuthenticationFilter;
+import com.example.board.auth.oauth2.CookieOAuth2AuthorizationRequestRepository;
+import com.example.board.auth.oauth2.CustomOAuth2UserService;
+import com.example.board.auth.oauth2.OAuth2LoginFailureHandler;
+import com.example.board.auth.oauth2.OAuth2LoginSuccessHandler;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -47,8 +51,17 @@ public class SecurityConfig {
     return configuration.getAuthenticationManager();
   }
 
+  // 단계 8 주의 — oauth2 부품들은 생성자 필드가 아니라 "빈 메서드 파라미터"로 받는다.
+  // CustomOAuth2UserService가 PasswordEncoder(이 클래스의 @Bean)를 쓰므로, 생성자로 받으면
+  // SecurityConfig → CustomOAuth2UserService → PasswordEncoder → SecurityConfig 순환이 생긴다.
+  // 메서드 파라미터는 SecurityConfig 인스턴스가 만들어진 뒤 해석되므로 고리가 끊긴다.
   @Bean
-  public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+  public SecurityFilterChain securityFilterChain(
+      HttpSecurity http,
+      CookieOAuth2AuthorizationRequestRepository cookieAuthorizationRequestRepository,
+      CustomOAuth2UserService customOAuth2UserService,
+      OAuth2LoginSuccessHandler oAuth2LoginSuccessHandler,
+      OAuth2LoginFailureHandler oAuth2LoginFailureHandler) throws Exception {
     http
         // CSRF 보호 끔 — 쿠키 세션이 아닌 토큰 인증이라 불필요 (REST API)
         .csrf(AbstractHttpConfigurer::disable)
@@ -72,6 +85,18 @@ public class SecurityConfig {
             // 단계 6: board 생성/수정/삭제의 ADMIN 인가는 BoardController의 @PreAuthorize("hasRole('ADMIN')")로 이동.
             // 공개 GET 규칙과 anyRequest().authenticated()는 유지 → 비로그인은 401, 로그인 USER는 @PreAuthorize가 403.
             .anyRequest().authenticated())
+        // 단계 8: OAuth 표준화 — 단계 7 수동 구현(KakaoOAuthController/Client)이 하던 전 과정을
+        // oauth2Login 필터들이 대신한다. 시작 URL은 /oauth2/authorization/kakao (표준 기본값),
+        // 콜백은 /login/oauth2/code/kakao — 카카오 콘솔에 이 콜백 URI 등록 필수.
+        .oauth2Login(oauth -> oauth
+            // state 저장을 세션(기본값) 대신 쿠키로 — STATELESS 유지
+            .authorizationEndpoint(endpoint ->
+                endpoint.authorizationRequestRepository(cookieAuthorizationRequestRepository))
+            // 사용자 조회 직후 find-or-create (단계 3 CustomUserDetailsService의 OAuth판)
+            .userInfoEndpoint(userInfo -> userInfo.userService(customOAuth2UserService))
+            // 성공: 우리 JWT + refresh 쿠키 / 실패: 401 JSON (기본값은 화면 리다이렉트라 교체)
+            .successHandler(oAuth2LoginSuccessHandler)
+            .failureHandler(oAuth2LoginFailureHandler))
         // 401/403을 우리 ErrorResponse JSON으로 응답
         .exceptionHandling(e -> e
             .authenticationEntryPoint(authenticationEntryPoint)
