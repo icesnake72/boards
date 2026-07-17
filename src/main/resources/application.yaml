@@ -93,3 +93,5 @@ logging:
   level:
     org.hibernate.SQL: debug
     org.springframework.security.web.FilterChainProxy: DEBUG
+    # 단계 9: OAuth2/OIDC 처리 흐름(CustomOidcUserService 등)의 debug 로그를 보기 위함
+    com.example.board.auth.oauth2: debug
