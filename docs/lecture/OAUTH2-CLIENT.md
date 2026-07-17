@@ -188,6 +188,32 @@ TokenPair tokens = authService.issueTokenPair(user);   // 단계 4~5 발급 경�
 
 건드리지 않은 것: 쿠키 저장소, SuccessHandler(registrationId로 이미 일반화돼 있었음), FailureHandler, SecurityConfig — **필터·핸들러는 제공자 수와 무관**하다. `/oauth2/authorization/google` 시작 주소도 자동으로 생긴다.
 
+구글 기준 전체 시퀀스 — §3의 카카오 다이어그램과 **뼈대(①~⑫)가 완전히 같고**, 상대방 주소와 ⑩의 응답 해석만 다르다:
+
+```mermaid
+sequenceDiagram
+    participant B as 브라우저
+    participant F as Spring Security 필터<br/>(라이브러리 코드)
+    participant U as 우리가 작성한 클래스<br/>(같은 서버 안)
+    participant G as 구글
+
+    B->>F: ① GET /oauth2/authorization/google
+    F->>U: ② 인가 요청 저장 (CookieOAuth2AuthorizationRequestRepository)
+    U-->>B: Set-Cookie: oauthRequest (state 포함, SameSite=Lax)
+    F-->>B: ③ 302 → accounts.google.com (client_id, scope=profile email, state, redirect_uri)
+    B->>G: ④ 구글 계정 선택/동의
+    G-->>B: ⑤ 302 → /login/oauth2/code/google?code=..&state=..
+    B->>F: ⑥ 콜백 (+oauthRequest 쿠키 자동 동봉)
+    F->>U: ⑦ 쿠키에서 인가 요청 복원 → state 대조
+    F->>G: ⑧ 토큰 교환 (oauth2.googleapis.com/token)
+    F->>G: ⑨ GET userinfo — { sub, email, name } 평면 JSON
+    F->>U: ⑩ CustomOAuth2UserService.loadUser<br/>extractUserInfo GOOGLE 분기 → find-or-create<br/>(신규면 users + user_profiles INSERT, username=google_{sub})
+    F->>U: ⑪ OAuth2LoginSuccessHandler<br/>(getName()=sub, 구글은 user-name-attribute 기본값)
+    U-->>B: ⑫ 200 {accessToken} + Set-Cookie: refreshToken(httpOnly)
+```
+
+②③⑥⑦⑧⑫는 제공자와 무관한 공통 구간이고, 구글이 개입하는 것은 ④⑤⑧⑨뿐이다. 우리 코드가 제공자를 구분하는 지점은 ⑩의 `extractUserInfo` **단 한 곳** — 위 표의 "분기 1개"가 다이어그램에서는 이 지점이다. ⑨ 이후 구글 토큰은 버려지고, 로그인의 최종 산출물은 ⑫의 **우리 JWT**다.
+
 **함정 — openid scope**: 구글 기본 scope에 `openid`가 있는데, 이걸 넣으면 **OIDC 경로**로 빠져 `OidcUserService`가 담당하게 되고 우리 `CustomOAuth2UserService`는 호출되지 않는다. 순수 OAuth2로 통일하려고 `scope: profile,email`만 명시했다. (OIDC 전환은 후속 주제)
 
 **동일 인물의 두 소셜 계정**: 카카오와 구글의 이메일이 같아도 **별도 계정**으로 생성된다(구글 쪽은 대체 이메일). 소유 확인 없는 이메일 기반 자동 연동은 계정 탈취 벡터이기 때문 — 단계 7부터의 정책 그대로이며, 테스트로 고정해 뒀다.
@@ -266,26 +292,16 @@ public SecurityFilterChain securityFilterChain(
 
 ## 9. 핵심 요약 한 장
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│ 표준화 = 프로토콜 절차(URL·state·교환·조회)를 라이브러리에 넘기고,    │
-│          우리 서비스의 고유 결정만 4개 클래스로 남기는 것             │
-│                                                                     │
-│ URL:  시작 /oauth2/authorization/kakao                               │
-│       콜백 /login/oauth2/code/kakao  ← 콘솔 재등록 필수              │
-│                                                                     │
-│ 우리가 만드는 것:                                                    │
-│   쿠키 state 저장소  ← STATELESS라 세션 기본값 사용 불가              │
-│   CustomOAuth2UserService  ← find-or-create (단계 7 정책 그대로)     │
-│   Success/FailureHandler  ← REST API 응답 형태 (기본값은 리다이렉트)  │
-│                                                                     │
-│ 함정:  카카오는 provider 블록 직접 기술 + client_secret_post          │
-│        scope는 콘솔 동의 항목과 일치해야 (수동 구현은 안 보냈었다)     │
-│        @Configuration 순환 의존 → 빈 메서드 파라미터로 끊기           │
-│                                                                     │
-│ 전환 전략:  병행 후 제거(strangler) — 빅뱅이던 단계 2→3과 대비        │
-└─────────────────────────────────────────────────────────────────────┘
-```
+> [!IMPORTANT]
+> 표준화 = 프로토콜 절차(URL·state·교환·조회)를 라이브러리에 넘기고,
+> 우리 서비스의 고유 결정만 4개 클래스로 남기는 것
+
+| 구분 | 내용 |
+|------|------|
+| URL | 시작 `/oauth2/authorization/kakao` · 콜백 `/login/oauth2/code/kakao` — 콘솔 재등록 필수 |
+| 우리가 만드는 것 | 쿠키 state 저장소 (STATELESS라 세션 기본값 사용 불가) · `CustomOAuth2UserService` (find-or-create, 단계 7 정책 그대로) · Success/FailureHandler (REST API 응답 형태 — 기본값은 리다이렉트) |
+| 함정 | 카카오는 provider 블록 직접 기술 + `client_secret_post` · scope는 콘솔 동의 항목과 일치해야 (수동 구현은 안 보냈었다) · `@Configuration` 순환 의존 → 빈 메서드 파라미터로 끊기 |
+| 전환 전략 | 병행 후 제거(strangler) — 빅뱅이던 단계 2→3과 대비 |
 
 ---
 
