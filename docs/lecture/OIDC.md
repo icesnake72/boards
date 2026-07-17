@@ -5,6 +5,7 @@
 - **브랜치**: `step9-oidc`
 - **관련 코드**: `auth/oauth2/CustomOidcUserService`(신규), `auth/oauth2/CustomOAuth2UserService`, `auth/oauth2/OAuth2LoginSuccessHandler`, `global/config/SecurityConfig`, `application.yaml`
 - **선수 지식**: [OAUTH2-CLIENT.md](OAUTH2-CLIENT.md) — 특히 §5-5의 "openid 함정" 각주, [JWT-AUTH.md](JWT-AUTH.md) — 우리 JWT의 서명/검증 구조
+- **검증 상태**: 전체 테스트 75개 green + 실 브라우저 E2E 확인 (2026-07-18)
 
 ---
 
@@ -17,6 +18,44 @@
 - id_token(외부 JWT)과 우리 access token(내부 JWT)이 **누가 서명하고 누가 검증하는지** 구분할 수 있다
 - Spring Security가 openid scope 유무로 **담당 서비스를 바꿔 부르는** 지점을 안다
 - OidcUser와 OAuth2User의 관계, `getName()`이 여전히 sub인 이유를 안다
+
+---
+
+## 한눈에 보기 — 3분 요약
+
+바쁘면 이 섹션만 읽어도 된다. 상세는 §1부터.
+
+**OIDC란**: 우리가 카카오/구글 "로그인"에 써 온 OAuth2는 원래 **인가(권한 위임)** 프로토콜이다 — "이 앱이 내 정보를 읽어도 된다"까지만 보장하고, "지금 온 사람이 누구인가"는 보장하지 않는다. OIDC(OpenID Connect)는 OAuth2 위에 얹은 **인증 계층**으로, 토큰 응답에 **id_token**(제공자가 서명한 JWT 신분증)을 하나 더 실어 보낸다. 우리는 그 서명을 검증하는 것만으로 "구글이 보증한 사용자 정보"를 별도 조회 없이 얻는다.
+
+**우리의 구현** — 전부 3곳:
+
+| 변경 | 파일 | 내용 |
+|------|------|------|
+| scope 1줄 | `application.yaml` | 구글 scope에 `openid` 추가 → 구글 로그인이 OIDC 경로로 전환 |
+| 신규 1클래스 | `CustomOidcUserService` | 표준 `OidcUserService`에 위임해 검증된 id_token을 받고, 기존 `upsertUser`(find-or-create) 재사용 |
+| 연결 1줄 | `SecurityConfig` | `.userInfoEndpoint`에 `.oidcUserService(...)` 추가 — 카카오(OAuth2)와 구글(OIDC) 병존 |
+
+**처리 시퀀스** — 단계 8과 뼈대는 같고, ⑤~⑥(id_token 검증이 userinfo 조회를 대체)만 다르다:
+
+```mermaid
+sequenceDiagram
+    participant B as 브라우저
+    participant F as Spring Security 필터<br/>(라이브러리 코드)
+    participant U as 우리가 작성한 클래스<br/>(같은 서버 안)
+    participant G as 구글
+
+    B->>F: ① GET /oauth2/authorization/google
+    F->>U: ② 인가 요청 저장 (쿠키 저장소 — 단계 8 그대로)
+    F-->>B: ③ 302 → accounts.google.com (scope=openid profile email)
+    B->>G: ④ 계정 선택/동의 후 콜백 (code, state)
+    F->>G: ⑤ 토큰 교환 — 응답에 id_token(JWT)이 함께 온다
+    F->>F: ⑥ id_token 서명·iss·aud·exp 검증 (라이브러리가 완료)
+    F->>U: ⑦ CustomOidcUserService.loadUser<br/>검증된 claims(sub/email/name)로 upsertUser 재사용
+    F->>U: ⑧ OAuth2LoginSuccessHandler (단계 8 그대로)
+    U-->>B: ⑨ 200 {우리 accessToken} + refresh 쿠키
+```
+
+핵심 한 줄: **구글에게 "누구인지 물어보러 가는"(userinfo HTTP 호출) 대신, 구글이 서명해 준 신분증(id_token)을 검증해서 읽는다.** 나머지(state 쿠키, upsert 정책, JWT 발급)는 단계 8에서 만든 그대로다.
 
 ---
 
