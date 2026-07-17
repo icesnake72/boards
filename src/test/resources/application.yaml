@@ -33,6 +33,10 @@ jwt:
   refresh-token-validity-seconds: 1209600
 
 app:
+  # 단계 10: 테스트 업로드 루트 — OS 임시 디렉터리 하위(테스트 종료 후 자동 정리 대상). 단위 테스트는 @TempDir 우선.
+  upload:
+    dir: ${java.io.tmpdir}/board-test-uploads
+
   refresh-cookie:
     name: refreshToken
     secure: false

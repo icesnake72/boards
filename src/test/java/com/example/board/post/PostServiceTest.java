@@ -1,19 +1,24 @@
 package com.example.board.post;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.example.board.board.Board;
 import com.example.board.board.BoardRepository;
+import com.example.board.global.exception.BusinessException;
 import com.example.board.post.dto.PostCreateRequest;
 import com.example.board.post.dto.PostResponse;
 import com.example.board.post.dto.PostUpdateRequest;
 import com.example.board.user.Role;
 import com.example.board.user.User;
 import com.example.board.user.UserRepository;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.transaction.annotation.Transactional;
 
 @SpringBootTest
@@ -41,7 +46,7 @@ class PostServiceTest {
   @Test
   void should_createPost_whenAuthorIsLoggedInUser() {
     PostResponse response =
-        postService.create(board.getId(), author.getId(), new PostCreateRequest("제목", "내용"));
+        postService.create(board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), null);
 
     assertThat(response.title()).isEqualTo("제목");
     assertThat(response.authorUsername()).isEqualTo("author1");
@@ -54,7 +59,7 @@ class PostServiceTest {
   @Test
   void should_updatePost() {
     PostResponse created =
-        postService.create(board.getId(), author.getId(), new PostCreateRequest("제목", "내용"));
+        postService.create(board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), null);
 
     PostResponse updated =
         postService.update(created.id(), new PostUpdateRequest("수정 제목", "수정 내용"));
@@ -66,7 +71,7 @@ class PostServiceTest {
   @Test
   void should_deletePost() {
     PostResponse created =
-        postService.create(board.getId(), author.getId(), new PostCreateRequest("제목", "내용"));
+        postService.create(board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), null);
 
     postService.delete(created.id());
 
@@ -75,9 +80,58 @@ class PostServiceTest {
   }
 
   @Test
+  void should_createPostWithImages_andExposeUrlsOnGet() {
+    MockMultipartFile image = new MockMultipartFile(
+        "images", "photo.png", MediaType.IMAGE_PNG_VALUE, new byte[] {1, 2, 3});
+
+    PostResponse created = postService.create(
+        board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), List.of(image));
+
+    assertThat(created.images()).hasSize(1);
+    assertThat(created.images().get(0).url()).startsWith("/images/");
+    assertThat(created.images().get(0).originalName()).isEqualTo("photo.png");
+
+    PostResponse fetched = postService.getPost(created.id());
+    assertThat(fetched.images()).hasSize(1);
+    assertThat(fetched.images().get(0).url()).isEqualTo(created.images().get(0).url());
+  }
+
+  @Test
+  void should_createPostWithoutImages_whenImagesNull() {
+    PostResponse created = postService.create(
+        board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), null);
+
+    assertThat(created.images()).isEmpty();
+  }
+
+  @Test
+  void should_rejectNonImageFile() {
+    MockMultipartFile textFile = new MockMultipartFile(
+        "images", "note.txt", MediaType.TEXT_PLAIN_VALUE, "hello".getBytes());
+
+    assertThatThrownBy(() -> postService.create(
+        board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), List.of(textFile)))
+        .isInstanceOf(BusinessException.class);
+  }
+
+  @Test
+  void should_exposeThumbnailUrl_onList() {
+    MockMultipartFile image = new MockMultipartFile(
+        "images", "thumb.png", MediaType.IMAGE_PNG_VALUE, new byte[] {9});
+    postService.create(
+        board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), List.of(image));
+
+    var page = postService.getPosts(board.getId(),
+        org.springframework.data.domain.PageRequest.of(0, 10));
+
+    assertThat(page.getContent()).hasSize(1);
+    assertThat(page.getContent().get(0).thumbnailUrl()).startsWith("/images/");
+  }
+
+  @Test
   void should_increaseViewCount_whenGetPost() {
     PostResponse created =
-        postService.create(board.getId(), author.getId(), new PostCreateRequest("제목", "내용"));
+        postService.create(board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), null);
 
     PostResponse viewed = postService.getPost(created.id());
 

@@ -14,7 +14,12 @@ public interface PostRepository extends JpaRepository<Post, Long> {
   @EntityGraph(attributePaths = {"board", "author"})
   Page<Post> findByBoardId(Long boardId, Pageable pageable);
 
-  @Query("select p from Post p join fetch p.board join fetch p.author where p.id = :id")
+  // 단건 조회는 컬렉션(images) 하나만 fetch join 하므로 MultipleBagFetchException이 없다.
+  // 이미지가 여러 개면 Post row가 중복되므로 distinct로 제거한다. images가 없을 수 있어 left join.
+  @Query("select distinct p from Post p "
+      + "join fetch p.board join fetch p.author "
+      + "left join fetch p.images "
+      + "where p.id = :id")
   Optional<Post> findDetailById(@Param("id") Long id);
 
   // 메서드 보안(@postSecurity.isAuthor)용 — 작성자 id만 가볍게 조회(엔티티 로딩 없이 소유권 판단)

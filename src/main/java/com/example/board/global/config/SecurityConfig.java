@@ -81,6 +81,8 @@ public class SecurityConfig {
             .requestMatchers("/api/oauth/**").permitAll()
             .requestMatchers(HttpMethod.GET, "/api/v1/boards/**").permitAll()
             .requestMatchers(HttpMethod.GET, "/api/v1/posts/**").permitAll()
+            // 단계 10: 업로드된 게시글 이미지 정적 서빙 — 조회는 공개
+            .requestMatchers(HttpMethod.GET, "/images/**").permitAll()
             // /me는 인증 필요 — 타인 프로필(/profiles/{userId})보다 먼저 매칭해야 한다
             .requestMatchers("/api/v1/profiles/me").authenticated()
             .requestMatchers(HttpMethod.GET, "/api/v1/profiles/*").permitAll()

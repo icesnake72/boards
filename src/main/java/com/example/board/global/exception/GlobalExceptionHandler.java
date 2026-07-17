@@ -12,6 +12,8 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @Slf4j
@@ -78,6 +80,22 @@ public class GlobalExceptionHandler {
     log.warn("Unsupported media type: {}", e.getContentType());
     return ResponseEntity.status(ErrorCode.UNSUPPORTED_MEDIA_TYPE.getStatus())
         .body(ErrorResponse.of(ErrorCode.UNSUPPORTED_MEDIA_TYPE));
+  }
+
+  // 단계 10: multipart 파일이 max-file-size를 초과하면 발생 (MultipartException의 하위라 먼저 매칭되도록 둔다)
+  @ExceptionHandler(MaxUploadSizeExceededException.class)
+  public ResponseEntity<ErrorResponse> handleMaxUploadSize(MaxUploadSizeExceededException e) {
+    log.warn("Upload size exceeded: {}", e.getMessage());
+    return ResponseEntity.status(ErrorCode.FILE_SIZE_EXCEEDED.getStatus())
+        .body(ErrorResponse.of(ErrorCode.FILE_SIZE_EXCEEDED));
+  }
+
+  // 단계 10: multipart 파싱 자체가 실패한 경우(잘못된 form-data 등)
+  @ExceptionHandler(MultipartException.class)
+  public ResponseEntity<ErrorResponse> handleMultipart(MultipartException e) {
+    log.warn("Multipart request error: {}", e.getMessage());
+    return ResponseEntity.status(ErrorCode.INVALID_INPUT.getStatus())
+        .body(ErrorResponse.of(ErrorCode.INVALID_INPUT));
   }
 
   // 단계 6: @PreAuthorize 거부는 컨트롤러 진입 시점에 AuthorizationDeniedException(AccessDeniedException의 하위)을
