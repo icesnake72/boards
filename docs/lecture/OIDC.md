@@ -110,7 +110,37 @@ id_token은 **우리에게 새로운 개념이 아니다** — 단계 2에서 �
 
 ## 3. 경로 분기 — openid scope 한 줄이 담당자를 바꾼다
 
-Spring Security의 oauth2Login은 토큰 응답을 받은 **직후** scope에 `openid`가 있는지를 본다. 그 한 줄로 아래 두 경로가 갈린다:
+### 3-1. 무대 — SecurityFilterChain 대략도
+
+Provider 분기(3-2)가 일어나는 곳은 필터 체인 **안**이다. 먼저 요청이 지나는 필터 순서를 대략적으로 본다 — 표준 필터는 다 생략하고, 이 프로젝트가 **추가·교체한 것**과 OAuth 관련 필터만 남겼다. `SecurityConfig.securityFilterChain(...)` 하나가 이 체인을 조립한다.
+
+```mermaid
+flowchart TD
+  Req["HTTP 요청 (STATELESS — 세션 없음)"] --> F1["OAuth2AuthorizationRequestRedirectFilter"]
+  F1 -. "GET /oauth2/authorization/google" .-> R1["302 → accounts.google.com<br/>(여기서 응답 종료)"]
+  F1 --> F2["OAuth2LoginAuthenticationFilter"]
+  F2 -. "GET /login/oauth2/code/google (콜백)" .-> R2["OIDC 인증 → SuccessHandler → 우리 JWT<br/>(3-2에서 상세)"]
+  F2 --> F3["JwtAuthenticationFilter (우리 추가)"]
+  F3 -. "Authorization: Bearer ..." .-> C1["토큰 검증 → SecurityContext에 Authentication 저장"]
+  F3 --> F4["ExceptionTranslationFilter<br/>(entryPoint·accessDeniedHandler 우리 교체)"]
+  F4 --> F5["AuthorizationFilter — authorizeHttpRequests 규칙 판정"]
+  F5 -->|통과| Ctrl["DispatcherServlet → Controller<br/>(@PreAuthorize 2차 인가 · 단계 6)"]
+  F5 -->|거부| Err["401/403 ErrorResponse JSON"]
+```
+
+읽는 법 — **한 요청은 자기 경로에서 처리되면 거기서 응답하고 끝난다**(점선 곁가지):
+
+| 요청 | 처리 필터 | 결과 |
+|------|-----------|------|
+| `GET /oauth2/authorization/google` | `OAuth2AuthorizationRequestRedirectFilter` | 302 리다이렉트로 즉시 응답 — 뒤 필터 안 감 |
+| 콜백 `GET /login/oauth2/code/google` | `OAuth2LoginAuthenticationFilter` | 인증 성공 시 SuccessHandler가 응답 (3-2) |
+| 일반 API (`Bearer` 토큰) | `JwtAuthenticationFilter`가 컨텍스트만 채우고 통과 → `AuthorizationFilter`가 인가 판정 | 통과하면 컨트롤러, 아니면 401/403 |
+
+핵심: **OAuth 로그인은 앞쪽 두 필터가, 로그인 이후의 모든 API는 우리 `JwtAuthenticationFilter`가** 담당한다. 즉 소셜 로그인의 최종 산출물(우리 JWT)이 이후 요청에서 이 체인의 주역이 되는 지점이 `JwtAuthenticationFilter`다. OAuth 필터들과 JwtAuthenticationFilter는 **같은 체인 안에 공존**하되 요청 URL에 따라 서로 다른 것이 발동한다.
+
+### 3-2. 콜백 필터 내부 — openid로 UserService가 갈린다
+
+위 그림의 `OAuth2LoginAuthenticationFilter`가 콜백을 받으면, 그 **내부**에서 토큰 응답의 scope에 `openid`가 있는지로 아래 두 경로가 갈린다:
 
 ```mermaid
 flowchart TD
