@@ -27,12 +27,15 @@ spring:
             client-authentication-method: client_secret_post
             scope: profile_nickname
           # 단계 8 확장: 구글 — CommonOAuth2Provider에 내장이라 provider 블록이 필요 없다(카카오와의 대비).
-          # 주의: scope에 openid를 넣으면 OIDC 경로로 빠져 CustomOAuth2UserService를 타지 않는다 —
-          # 순수 OAuth2로 통일하기 위해 profile,email만 명시한다. user-name-attribute는 내장값 "sub".
+          # 단계 9: scope에 openid를 추가 → 구글 로그인이 OIDC 경로로 전환된다.
+          # openid가 있으면 토큰 응답에 id_token(JWT)이 실려 오고, 사용자 로딩은
+          # DefaultOAuth2UserService가 아니라 OidcUserService(→ CustomOidcUserService)가 담당한다.
+          # 카카오는 순수 OAuth2 그대로 — 두 경로의 대비가 이 단계의 학습 포인트다.
           google:
             client-id: ${GOOGLE_CLIENT_ID}
             client-secret: ${GOOGLE_CLIENT_SECRET}
-            scope: profile,email
+            # scope: profile,email  # 단계 9 처리에 의해 제거 — 단계 8은 openid를 빼서 OIDC 경로를 회피했었다
+            scope: openid,profile,email
         provider:
           kakao:
             authorization-uri: https://kauth.kakao.com/oauth/authorize

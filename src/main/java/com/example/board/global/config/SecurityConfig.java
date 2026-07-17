@@ -3,6 +3,7 @@ package com.example.board.global.config;
 import com.example.board.auth.jwt.JwtAuthenticationFilter;
 import com.example.board.auth.oauth2.CookieOAuth2AuthorizationRequestRepository;
 import com.example.board.auth.oauth2.CustomOAuth2UserService;
+import com.example.board.auth.oauth2.CustomOidcUserService;
 import com.example.board.auth.oauth2.OAuth2LoginFailureHandler;
 import com.example.board.auth.oauth2.OAuth2LoginSuccessHandler;
 import lombok.RequiredArgsConstructor;
@@ -60,6 +61,7 @@ public class SecurityConfig {
       HttpSecurity http,
       CookieOAuth2AuthorizationRequestRepository cookieAuthorizationRequestRepository,
       CustomOAuth2UserService customOAuth2UserService,
+      CustomOidcUserService customOidcUserService,
       OAuth2LoginSuccessHandler oAuth2LoginSuccessHandler,
       OAuth2LoginFailureHandler oAuth2LoginFailureHandler) throws Exception {
     http
@@ -93,7 +95,13 @@ public class SecurityConfig {
             .authorizationEndpoint(endpoint ->
                 endpoint.authorizationRequestRepository(cookieAuthorizationRequestRepository))
             // 사용자 조회 직후 find-or-create (단계 3 CustomUserDetailsService의 OAuth판)
-            .userInfoEndpoint(userInfo -> userInfo.userService(customOAuth2UserService))
+            // .userInfoEndpoint(userInfo -> userInfo.userService(customOAuth2UserService))
+            //   ↑ 단계 9 처리에 의해 제거 — 아래처럼 oidcUserService 연결을 추가하며 확장했다
+            // 단계 9: 두 경로를 각각 연결 — 카카오(순수 OAuth2)는 userService,
+            // 구글(openid scope → OIDC)은 oidcUserService가 담당한다. 정책은 같은 upsert로 수렴.
+            .userInfoEndpoint(userInfo -> userInfo
+                .userService(customOAuth2UserService)
+                .oidcUserService(customOidcUserService))
             // 성공: 우리 JWT + refresh 쿠키 / 실패: 401 JSON (기본값은 화면 리다이렉트라 교체)
             .successHandler(oAuth2LoginSuccessHandler)
             .failureHandler(oAuth2LoginFailureHandler))
