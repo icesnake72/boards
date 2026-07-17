@@ -15,6 +15,7 @@ import org.springframework.http.ResponseCookie;
 import org.springframework.security.oauth2.client.web.AuthorizationRequestRepository;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
 import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames;
+import org.springframework.security.oauth2.core.oidc.endpoint.OidcParameterNames;
 import org.springframework.stereotype.Component;
 
 // 단계 8: 인가 요청(state 포함)을 쿠키에 보관하는 저장소.
@@ -51,7 +52,11 @@ public class CookieOAuth2AuthorizationRequestRepository
       String clientId,
       String redirectUri,
       Set<String> scopes,
-      String registrationId
+      String registrationId,
+      // 단계 9 nonce 보강: OIDC일 때 라이브러리가 attribute로 실어 나르는 난수 원본.
+      // 이 값을 유실하면 id_token의 nonce 검증이 조용히 스킵된다(재사용/주입 방어 소실).
+      // 순수 OAuth2(카카오)에는 없는 값이라 null 허용.
+      String nonce
   ) {
   }
 
@@ -77,7 +82,10 @@ public class CookieOAuth2AuthorizationRequestRepository
         // 요청한 동의 항목 — registration.kakao.scope (예: [profile_nickname])
         authorizationRequest.getScopes(),
         // 어느 registration의 요청인지("kakao") — 콜백에서 설정을 다시 찾는 열쇠
-        authorizationRequest.getAttribute(OAuth2ParameterNames.REGISTRATION_ID));
+        authorizationRequest.getAttribute(OAuth2ParameterNames.REGISTRATION_ID),
+        // 단계 9 nonce 보강: OIDC 요청에만 존재(순수 OAuth2는 null). 복원 시 이 값이 없으면
+        // OidcAuthorizationCodeAuthenticationProvider가 nonce 검증을 건너뛴다
+        authorizationRequest.getAttribute(OidcParameterNames.NONCE));
     try {
       String json = objectMapper.writeValueAsString(stored);
       String value = Base64.getUrlEncoder()
@@ -105,8 +113,14 @@ public class CookieOAuth2AuthorizationRequestRepository
           .clientId(stored.clientId())
           .redirectUri(stored.redirectUri())
           .scopes(stored.scopes())
-          .attributes(attrs ->
-              attrs.put(OAuth2ParameterNames.REGISTRATION_ID, stored.registrationId()))
+          .attributes(attrs -> {
+            attrs.put(OAuth2ParameterNames.REGISTRATION_ID, stored.registrationId());
+            // 단계 9 nonce 보강: OIDC 요청이면 원본을 attribute로 되돌려 놓아야
+            // 라이브러리의 nonce 대조가 실제로 수행된다 (null이면 저장 때부터 순수 OAuth2)
+            if (stored.nonce() != null) {
+              attrs.put(OidcParameterNames.NONCE, stored.nonce());
+            }
+          })
           .build();
     } catch (Exception e) {
       // 조작·손상된 쿠키는 없는 것으로 취급한다 — 예외 상세는 로그로만

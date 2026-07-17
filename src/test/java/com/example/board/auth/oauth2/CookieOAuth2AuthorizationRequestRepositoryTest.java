@@ -11,6 +11,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
 import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames;
+import org.springframework.security.oauth2.core.oidc.endpoint.OidcParameterNames;
 
 // 쿠키 저장소의 save → load → remove 왕복과 불량 쿠키 방어를 검증한다 (스프링 컨텍스트 불필요).
 class CookieOAuth2AuthorizationRequestRepositoryTest {
@@ -76,6 +77,49 @@ class CookieOAuth2AuthorizationRequestRepositoryTest {
     assertThat(removed).isNotNull();
     // 1회용 — remove 후 쿠키는 즉시 만료된다
     assertThat(removeResponse.getHeader("Set-Cookie")).contains("Max-Age=0");
+  }
+
+  // OIDC(구글) 요청 — 라이브러리가 nonce attribute를 실어 온다
+  private OAuth2AuthorizationRequest oidcRequest() {
+    return OAuth2AuthorizationRequest.authorizationCode()
+        .state("state-oidc")
+        .authorizationUri("https://accounts.google.com/o/oauth2/v2/auth")
+        .clientId("google-client")
+        .redirectUri("http://localhost:8090/login/oauth2/code/google")
+        .scopes(Set.of("openid", "profile", "email"))
+        .attributes(attrs -> {
+          attrs.put(OAuth2ParameterNames.REGISTRATION_ID, "google");
+          attrs.put(OidcParameterNames.NONCE, "nonce-raw-xyz");
+        })
+        .build();
+  }
+
+  // 단계 9 회귀 방어: nonce를 유실하면 id_token 재사용/주입 검증이 조용히 스킵된다
+  @Test
+  void should_preserveNonce_whenOidcRequestRoundTrips() {
+    MockHttpServletResponse saveResponse = new MockHttpServletResponse();
+    repository.saveAuthorizationRequest(
+        oidcRequest(), new MockHttpServletRequest(), saveResponse);
+
+    OAuth2AuthorizationRequest loaded =
+        repository.loadAuthorizationRequest(requestWithCookieFrom(saveResponse));
+
+    assertThat(loaded).isNotNull();
+    assertThat(loaded.<String>getAttribute(OidcParameterNames.NONCE)).isEqualTo("nonce-raw-xyz");
+  }
+
+  // 순수 OAuth2(카카오)에는 nonce가 없어야 한다 — attribute가 없으면 라이브러리가 검증을 건너뛴다
+  @Test
+  void should_haveNoNonceAttribute_whenPlainOAuth2RoundTrips() {
+    MockHttpServletResponse saveResponse = new MockHttpServletResponse();
+    repository.saveAuthorizationRequest(
+        sampleRequest(), new MockHttpServletRequest(), saveResponse);
+
+    OAuth2AuthorizationRequest loaded =
+        repository.loadAuthorizationRequest(requestWithCookieFrom(saveResponse));
+
+    assertThat(loaded).isNotNull();
+    assertThat(loaded.<String>getAttribute(OidcParameterNames.NONCE)).isNull();
   }
 
   @Test
