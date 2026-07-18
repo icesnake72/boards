@@ -69,6 +69,31 @@ sequenceDiagram
 
 ---
 
+## 코드 작성 순서 — 무엇을 먼저 짜는가
+
+이 기능은 여러 계층에 걸쳐 있다. 원칙은 **의존의 역방향으로 짠다** — 남이 의존하는 밑바닥 부품(설정·엔티티·저장 서비스)을 먼저 만들고, 그것들을 **조립**하는 서비스·컨트롤러를 나중에, **노출**(서빙·보안)과 **예외·테스트**를 맨 끝에 둔다. 아래 순서대로 가면 각 단계에서 바로 앞 단계 산출물만 있으면 컴파일된다.
+
+| 순서 | 파일 | 이 시점에 하는 일 | 왜 이 순서인가 |
+|------|------|-----------------|--------------|
+| 1 | `application.yaml` | `spring.servlet.multipart`(크기 제한) + `app.upload.dir` 추가 | 저장 서비스가 읽을 설정 토대. 코드 없이 먼저 확정 |
+| 2 | `post/PostImage.java` (신규) | 첨부 이미지 엔티티(메타데이터 컬럼) | 도메인 최하위 부품 — 아무것도 의존하지 않음 |
+| 3 | `post/Post.java` | `@OneToMany images` + `addImage()` 편의 메서드 | 2가 있어야 컬렉션 타입이 성립 |
+| 4 | `global/storage/FileStorageService.java` (신규) | 디스크 저장/삭제 + 검증(MIME·확장자·traversal) | 서비스·컨트롤러가 의존할 저장 부품. 1의 `app.upload.dir` 주입 |
+| 5 | `post/dto/PostImageResponse.java` (신규) | `url = /images/{storedName}` 조립 | 응답 DTO 부품 |
+| 6 | `post/dto/PostResponse.java`·`PostListResponse.java` | 이미지 필드(`images`, `thumbnailUrl`) 추가 | 5가 있어야 필드 타입 성립 |
+| 7 | `post/PostRepository.java` | 단건 fetch join(+`distinct`), 목록 `@EntityGraph`+`@BatchSize` | 조회 계층 — 서비스가 호출 |
+| 8 | `post/PostService.java` | `create`에 이미지 저장+정합성, `delete`에 파일 정리 | 2·4·7 부품을 **조립**하는 핵심 |
+| 9 | `post/PostController.java` | `@RequestBody`→multipart(`@RequestPart`) 전환, 장수 검증 | 8을 호출하는 최상위 진입점 |
+| 10 | `global/config/WebConfig.java` | `/images/**` ResourceHandler 매핑 | 저장된 파일을 **노출**(서빙) |
+| 11 | `global/config/SecurityConfig.java` | `GET /images/**` permitAll | 10의 경로를 공개 허용 |
+| 12 | `ErrorCode.java`·`GlobalExceptionHandler.java` | 파일 예외 3종 + 크기 초과 핸들러 | 위 흐름의 실패 경로 정리 |
+| 13 | `test/.../FileStorageServiceTest`·`PostServiceTest` | `@TempDir`·`MockMultipartFile`로 검증 | 완성된 동작을 고정(기존 테스트 시그니처도 수정) |
+
+> [!TIP]
+> 큰 덩어리로 보면 **① 토대(1) → ② 도메인(2·3) → ③ 저장 부품(4) → ④ 응답·조회(5·6·7) → ⑤ 조립(8·9) → ⑥ 노출(10·11) → ⑦ 예외·테스트(12·13)** 의 7묶음이다. 부품이 조립보다, 조립이 노출보다 먼저라는 큰 골격만 기억하면 세부 순서는 컴파일러가 알려준다(앞 단계가 없으면 뒤 단계가 컴파일되지 않는다).
+
+---
+
 ## 1. 왜 파일은 DB에 안 넣나 / 어디에 저장하나
 
 첨부 이미지를 다룰 때 첫 갈림길은 **BLOB로 DB에 넣을 것인가, 파일시스템에 두고 링크만 DB에 저장할 것인가**다. 우리는 후자를 택했다. 근거는 실무 관점 4가지.
