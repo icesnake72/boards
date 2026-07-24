@@ -3,9 +3,9 @@
 - **과정명**: 강의용 Spring Boot 게시판 — 단계 12 (댓글 알림)
 - **대상**: 단계 11(댓글/대댓글)까지 마친 수강생 — 여기서부터는 도메인 하나를 새로 붙이는 대신, **한 도메인의 이벤트가 다른 도메인을 깨우는 결합 문제**를 다룬다. 트랜잭션과 이벤트의 접점(`@TransactionalEventListener`), 그 안에서만 나타나는 함정(AFTER_COMMIT + JPA 저장)이 이 단계의 진짜 학습 포인트다
 - **브랜치**: `step12-notification`
-- **관련 코드 (예정)**: `comment/CommentService`(이벤트 발행 지점 — `ApplicationEventPublisher` 주입), `notification/NotificationEvent`(레코드, `CommentCreatedEvent`), `notification/Notification`(엔티티 — 메타데이터 저장), `notification/NotificationType`(enum), `notification/NotificationRepository`(신규), `notification/NotificationService`(신규 — 조회/읽음), `notification/NotificationEventListener`(신규 — `@TransactionalEventListener(AFTER_COMMIT)` + `@Transactional(REQUIRES_NEW)`), `notification/NotificationController`(신규 — 4 엔드포인트), `notification/dto/NotificationResponse`(신규 — 메타→문구 렌더), `global/exception/ErrorCode`(`NOTIFICATION_NOT_FOUND` 추가)
+- **관련 코드**: `comment/CommentService`(이벤트 발행 지점 — `ApplicationEventPublisher` 주입), `notification/CommentCreatedEvent`(record), `notification/Notification`(엔티티 — 메타데이터 저장), `notification/NotificationType`(enum), `notification/NotificationRepository`, `notification/NotificationService`(조회/읽음), `notification/NotificationEventListener`(`@TransactionalEventListener(AFTER_COMMIT)` + `@Transactional(REQUIRES_NEW)`), `notification/NotificationController`(4 엔드포인트), `notification/dto/NotificationResponse`(메타→문구 렌더), `global/exception/ErrorCode`(`NOTIFICATION_NOT_FOUND` 추가)
 - **선수 지식**: [COMMENT.md](COMMENT.md) — `Comment`/`Post` 자기참조 관계와 서비스 경계, [FILE-UPLOAD.md](FILE-UPLOAD.md) §5 — `TransactionSynchronizationManager.registerSynchronization(afterCommit)`으로 파일 삭제를 커밋 뒤로 미룬 서사(이번 단계는 이 손수 방식을 표준 이벤트로 승격한다)
-- **상태**: **설계안 — 미구현**. 이 문서의 모든 코드는 저장소에 존재하지 않는 **제안 코드**이며 컴파일 확인 전이다. 구현이 끝나면 이 헤더를 검증 상태(테스트 케이스 수 + green + commit)로 교체한다
+- **상태**: **구현 완료** (2026-07-25). `NotificationServiceTest`(8) + `NotificationEventListenerTest`(3) 포함 전체 118개 green, `verify.sh` 전 구간(빌드+테스트+실기동 헬스체크) 통과. 문서의 코드는 실제 구현과 일치한다(일부 발췌는 요지 중심으로 축약될 수 있음)
 
 ---
 
