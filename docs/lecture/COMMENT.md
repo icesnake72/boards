@@ -588,6 +588,88 @@ public class CommentController {
 
 ---
 
+## curl로 실습하기 — 댓글/대댓글 시나리오
+
+앱이 기동된 상태(MySQL 포함)를 전제로, 로그인부터 작성·조회·수정·삭제까지 한 흐름으로 따라간다. 댓글 API는 JSON이라 파일 업로드(§단계 10)와 달리 multipart가 아니다. `postId=1`은 실제 존재하는 게시글 id로 바꾼다.
+
+```bash
+B=http://localhost:8090/api/v1
+
+# 0) 로그인 → accessToken (회원가입은 POST /auth/signup, 이미 계정이 있다고 가정)
+TOKEN=$(curl -s -X POST $B/auth/login -H 'Content-Type: application/json' \
+  -d '{"username":"uploader","password":"password123"}' | jq -r .accessToken)
+```
+
+### 작성 — 댓글과 대댓글
+
+`parentId`가 없으면 최상위 댓글, 있으면 그 댓글의 대댓글이다.
+
+```bash
+# 1) 최상위 댓글 작성 (인증 필요) → 201, 응답의 id를 기억
+curl -s -X POST $B/posts/1/comments \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"content":"첫 댓글입니다"}'
+# → {"id":1,"authorUsername":"uploader","content":"첫 댓글입니다","deleted":false,"createdAt":"...","children":[]}
+
+# 2) 대댓글 작성 — parentId에 위 댓글 id(1)를 지정 → 201
+curl -s -X POST $B/posts/1/comments \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"content":"대댓글입니다","parentId":1}'
+```
+
+### 조회 — 최상위 페이징 + 대댓글 nested (공개)
+
+```bash
+# 3) 댓글 목록 — 로그인 불필요(GET /posts/** permitAll). 최상위만 페이징, 대댓글은 children에 중첩
+curl -s "$B/posts/1/comments?page=0&size=10"
+# → {"content":[
+#      {"id":1,"authorUsername":"uploader","content":"첫 댓글입니다","deleted":false,
+#       "children":[{"id":2,"authorUsername":"uploader","content":"대댓글입니다","deleted":false,"children":[]}]}
+#    ], "page":{...}}
+```
+
+### 수정·삭제 — 작성자만
+
+```bash
+# 4) 댓글 수정 (작성자만 — @PreAuthorize) → 200
+curl -s -X PUT $B/comments/1 \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"content":"수정된 내용"}'
+
+# 5) 댓글 삭제 (작성자만, soft delete) → 204 No Content
+curl -s -o /dev/null -w "HTTP %{http_code}\n" -X DELETE $B/comments/1 \
+  -H "Authorization: Bearer $TOKEN"
+
+# 6) 삭제 후 다시 조회하면 내용이 마스킹된다(행·대댓글은 유지)
+curl -s "$B/posts/1/comments?page=0&size=10"
+# → id=1 댓글의 content가 "삭제된 댓글입니다", deleted=true, 대댓글(id=2)은 그대로
+```
+
+### 불변식·인가 위반 — 에러 응답 확인
+
+```bash
+# (a) 대댓글에 답글 시도 → 400 CANNOT_REPLY_TO_REPLY (parentId=2는 대댓글)
+curl -s -X POST $B/posts/1/comments \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"content":"대댓글의 대댓글?","parentId":2}'
+# → 400 {"code":"CANNOT_REPLY_TO_REPLY", ...}
+
+# (b) 남의 댓글 수정/삭제 시도 → 403 (다른 사용자 토큰으로)
+curl -s -o /dev/null -w "HTTP %{http_code}\n" -X DELETE $B/comments/2 \
+  -H "Authorization: Bearer $OTHER_TOKEN"
+# → 403 ACCESS_DENIED
+
+# (c) 없는 댓글 → 404 COMMENT_NOT_FOUND
+curl -s -o /dev/null -w "HTTP %{http_code}\n" -X PUT $B/comments/99999 \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"content":"x"}'
+```
+
+> [!TIP]
+> 가장 흔한 실패는 **작성/수정/삭제에서 `Authorization: Bearer` 토큰 누락(401)** 이다. 조회(GET)만 토큰 없이 되고, 나머지는 로그인이 필요하다. 파일 업로드 때의 `type=application/json` 같은 multipart 주의사항은 댓글 API에는 없다(순수 JSON).
+
+---
+
 ## 부록. 자주 나오는 질문 (FAQ)
 
 | 질문 | 답변 요약 |
