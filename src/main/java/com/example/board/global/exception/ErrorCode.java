@@ -12,6 +12,7 @@ public enum ErrorCode {
   PROFILE_NOT_FOUND(HttpStatus.NOT_FOUND, "프로필을 찾을 수 없습니다."),
   BOARD_NOT_FOUND(HttpStatus.NOT_FOUND, "게시판을 찾을 수 없습니다."),
   POST_NOT_FOUND(HttpStatus.NOT_FOUND, "게시글을 찾을 수 없습니다."),
+  COMMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "댓글을 찾을 수 없습니다."),
   // 단계 7에서 발견: 매핑 없는 URL이 500으로 새던 것을 404로 교정 (NoResourceFoundException 핸들러)
   RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "요청한 경로를 찾을 수 없습니다."),
 
@@ -33,6 +34,11 @@ public enum ErrorCode {
   INVALID_REFRESH_TOKEN(HttpStatus.UNAUTHORIZED, "유효하지 않은 refresh token입니다."),
   EXPIRED_REFRESH_TOKEN(HttpStatus.UNAUTHORIZED, "만료된 refresh token입니다. 다시 로그인하세요."),
   INVALID_INPUT(HttpStatus.BAD_REQUEST, "입력값이 올바르지 않습니다."),
+  // 단계 11: 댓글/대댓글 — 1단계 깊이 불변식과 삭제된 댓글에 대한 제약을 별도 코드로 구분한다.
+  CANNOT_REPLY_TO_REPLY(HttpStatus.BAD_REQUEST, "대댓글에는 답글을 달 수 없습니다."),
+  CANNOT_REPLY_TO_DELETED(HttpStatus.BAD_REQUEST, "삭제된 댓글에는 답글을 달 수 없습니다."),
+  CANNOT_EDIT_DELETED(HttpStatus.BAD_REQUEST, "삭제된 댓글은 수정할 수 없습니다."),
+  COMMENT_POST_MISMATCH(HttpStatus.BAD_REQUEST, "부모 댓글이 해당 게시글의 댓글이 아닙니다."),
   MALFORMED_REQUEST(HttpStatus.BAD_REQUEST, "요청 본문(JSON)을 읽을 수 없습니다."),
   TYPE_MISMATCH(HttpStatus.BAD_REQUEST, "요청 값의 타입이 올바르지 않습니다."),
   MISSING_PARAMETER(HttpStatus.BAD_REQUEST, "필수 요청 파라미터가 누락되었습니다."),

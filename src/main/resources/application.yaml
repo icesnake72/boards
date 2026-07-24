@@ -56,6 +56,9 @@ spring:
     properties:
       hibernate:
         format_sql: true
+        # 단계 11: LAZY 연관을 개별 SELECT가 아니라 IN 쿼리로 묶어 로딩(N+1 완화).
+        # @BatchSize를 안 붙인 연관(예: 대댓글의 author)도 이 전역값으로 배치 로딩된다.
+        default_batch_fetch_size: 100
   # 단계 10: multipart 업로드 크기 제한 — 초과 시 MaxUploadSizeExceededException(413)로 응답
   servlet:
     multipart:

@@ -90,6 +90,9 @@ public class SecurityConfig {
             // 단계 7: 카카오 OAuth2 — 로그인 전 단계이므로 당연히 공개. 콜백은 카카오發 리다이렉트로 들어온다.
             .requestMatchers("/api/oauth/**").permitAll()
             .requestMatchers(HttpMethod.GET, "/api/v1/boards/**").permitAll()
+            // 단계 11: 댓글 조회(GET /api/v1/posts/{postId}/comments)도 이 /posts/** 규칙에 포함되어 공개다.
+            // 댓글 작성/수정/삭제(POST /posts/{postId}/comments, PUT·DELETE /comments/{id})는
+            // 아래 anyRequest().authenticated()로 로그인이 강제되고, 소유권은 @commentSecurity가 담당한다.
             .requestMatchers(HttpMethod.GET, "/api/v1/posts/**").permitAll()
             // 단계 10: 업로드된 게시글 이미지 정적 서빙 — 조회는 공개
             .requestMatchers(HttpMethod.GET, "/images/**").permitAll()
