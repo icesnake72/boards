@@ -68,9 +68,15 @@ public class PostController {
     }
   }
 
+  // GET /posts/{id}는 permitAll이라 비로그인도 조회 가능 — 로그인 상태면 principal이 주입되고,
+  // 비로그인이면 userDetails가 null이다(익명 principal은 CustomUserDetails 타입이 아님).
+  // 조회수를 "남이 볼 때만" 올리기 위해 조회자 id를 서비스로 넘긴다(본인 글은 증가 제외).
   @GetMapping("/posts/{id}")
-  public PostResponse getPost(@PathVariable Long id) {
-    return postService.getPost(id);
+  public PostResponse getPost(
+      @PathVariable Long id,
+      @AuthenticationPrincipal CustomUserDetails userDetails) {
+    Long viewerId = userDetails == null ? null : userDetails.getId();
+    return postService.getPost(id, viewerId);
   }
 
   // 단계 6: 작성자만 수정/삭제 — URL 규칙으로 표현 못 하는 자원 소유권을 커스텀 보안 빈으로 검사.

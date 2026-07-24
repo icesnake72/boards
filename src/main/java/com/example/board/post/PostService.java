@@ -78,10 +78,15 @@ public class PostService {
     }
   }
 
+  // 단계 10: 조회수는 "남이 볼 때"만 올린다 — 본인 글 조회는 자기 조회수를 부풀리지 않도록 제외.
+  // viewerId는 비로그인이면 null(GET /posts/{id}는 permitAll). isAuthor(null)은 false이므로
+  // 비로그인 조회는 자연히 "남"으로 취급되어 증가한다.
   @Transactional
-  public PostResponse getPost(Long id) {
+  public PostResponse getPost(Long id, Long viewerId) {
     Post post = findPost(id);
-    post.increaseViewCount(); // dirty checking으로 트랜잭션 커밋 시 UPDATE 실행
+    if (!post.isAuthor(viewerId)) {
+      post.increaseViewCount(); // dirty checking으로 트랜잭션 커밋 시 UPDATE 실행
+    }
     return PostResponse.from(post);
   }
 

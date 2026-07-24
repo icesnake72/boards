@@ -136,7 +136,7 @@ class PostServiceTest {
 
     // 내 글 이미지는 그대로, 남의 글 이미지도 삭제되지 않아야 한다
     assertThat(updated.images()).hasSize(1);
-    assertThat(postService.getPost(other.id()).images()).hasSize(1);
+    assertThat(postService.getPost(other.id(), null).images()).hasSize(1);
   }
 
   @Test
@@ -182,7 +182,7 @@ class PostServiceTest {
     assertThat(created.images().get(0).url()).startsWith("/images/");
     assertThat(created.images().get(0).originalName()).isEqualTo("photo.png");
 
-    PostResponse fetched = postService.getPost(created.id());
+    PostResponse fetched = postService.getPost(created.id(), null);
     assertThat(fetched.images()).hasSize(1);
     assertThat(fetched.images().get(0).url()).isEqualTo(created.images().get(0).url());
   }
@@ -219,12 +219,34 @@ class PostServiceTest {
     assertThat(page.getContent().get(0).thumbnailUrl()).startsWith("/images/");
   }
 
+  // 단계 10: 남이 볼 때만 조회수 증가 — 본인 글 조회는 제외, 비로그인(null)은 증가.
   @Test
-  void should_increaseViewCount_whenGetPost() {
+  void should_increaseViewCount_whenOtherUserViews() {
+    PostResponse created =
+        postService.create(board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), null);
+    User other = userRepository.save(new User("viewer1", "viewer1@example.com", "encoded", Role.USER));
+
+    PostResponse viewed = postService.getPost(created.id(), other.getId());
+
+    assertThat(viewed.viewCount()).isEqualTo(1);
+  }
+
+  @Test
+  void should_notIncreaseViewCount_whenAuthorViews() {
     PostResponse created =
         postService.create(board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), null);
 
-    PostResponse viewed = postService.getPost(created.id());
+    PostResponse viewed = postService.getPost(created.id(), author.getId());
+
+    assertThat(viewed.viewCount()).isZero();
+  }
+
+  @Test
+  void should_increaseViewCount_whenAnonymousViews() {
+    PostResponse created =
+        postService.create(board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), null);
+
+    PostResponse viewed = postService.getPost(created.id(), null);
 
     assertThat(viewed.viewCount()).isEqualTo(1);
   }
