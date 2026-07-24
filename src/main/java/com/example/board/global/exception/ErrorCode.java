@@ -13,6 +13,8 @@ public enum ErrorCode {
   BOARD_NOT_FOUND(HttpStatus.NOT_FOUND, "게시판을 찾을 수 없습니다."),
   POST_NOT_FOUND(HttpStatus.NOT_FOUND, "게시글을 찾을 수 없습니다."),
   COMMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "댓글을 찾을 수 없습니다."),
+  // 단계 12: 알림 — 남의 알림 존재 유출을 막기 위해 소유 검증 실패도 이 코드(404)로 통일한다(열거 방어).
+  NOTIFICATION_NOT_FOUND(HttpStatus.NOT_FOUND, "알림을 찾을 수 없습니다."),
   // 단계 7에서 발견: 매핑 없는 URL이 500으로 새던 것을 404로 교정 (NoResourceFoundException 핸들러)
   RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "요청한 경로를 찾을 수 없습니다."),
 
