@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -92,6 +93,16 @@ class SecurityIntegrationTest {
     mockMvc.perform(get("/api/v1/profiles/me"))
         .andExpect(status().isUnauthorized())
         .andExpect(jsonPath("$.code").value("LOGIN_REQUIRED"));
+  }
+
+  // 단계 10 보안 보강: 모든 응답에 XSS/MIME sniffing 방어 헤더가 실리는지 검증.
+  @Test
+  void should_includeSecurityHeaders_onResponse() throws Exception {
+    mockMvc.perform(get("/api/v1/boards"))
+        .andExpect(status().isOk())
+        .andExpect(header().string("X-Content-Type-Options", "nosniff"))
+        .andExpect(header().string("Content-Security-Policy",
+            "default-src 'none'; img-src 'self'; frame-ancestors 'none'"));
   }
 
   @Test

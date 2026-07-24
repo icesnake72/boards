@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -74,6 +75,15 @@ public class SecurityConfig {
         // 세션을 만들지 않음(stateless) — 상태는 토큰이 들고 다닌다
         .sessionManagement(session ->
             session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+        // 단계 10 보안 보강: XSS/MIME sniffing 방어 헤더.
+        // - nosniff: 응답의 Content-Type을 브라우저가 임의로 재해석(sniffing)하지 못하게 한다.
+        //   업로드 이미지(/images/**)를 HTML/스크립트로 오해석하는 경로를 차단(Spring 기본값이나 명시).
+        // - CSP: 순수 REST API라 스크립트·스타일·프레임이 필요 없으므로 최소 권한으로 잠근다.
+        //   혹시 응답이 문서로 렌더되더라도 스크립트 실행/클릭재킹을 원천 차단.
+        .headers(headers -> headers
+            .contentTypeOptions(Customizer.withDefaults())
+            .contentSecurityPolicy(csp ->
+                csp.policyDirectives("default-src 'none'; img-src 'self'; frame-ancestors 'none'")))
         .authorizeHttpRequests(auth -> auth
             // 공개: 인증/회원가입(로그아웃 포함 — stateless라 인증 불필요), 게시판·게시글 조회
             .requestMatchers("/api/v1/auth/**").permitAll()
