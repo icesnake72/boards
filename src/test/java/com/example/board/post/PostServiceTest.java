@@ -61,11 +61,102 @@ class PostServiceTest {
     PostResponse created =
         postService.create(board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), null);
 
-    PostResponse updated =
-        postService.update(created.id(), new PostUpdateRequest("수정 제목", "수정 내용"));
+    PostResponse updated = postService.update(
+        created.id(), new PostUpdateRequest("수정 제목", "수정 내용", null), null);
 
     assertThat(updated.title()).isEqualTo("수정 제목");
     assertThat(updated.content()).isEqualTo("수정 내용");
+  }
+
+  @Test
+  void should_addImages_whenUpdatingPostWithNewImages() {
+    PostResponse created = postService.create(
+        board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), List.of(pngImage("a.png")));
+
+    PostResponse updated = postService.update(
+        created.id(), new PostUpdateRequest("제목", "내용", null), List.of(pngImage("b.png")));
+
+    assertThat(updated.images()).hasSize(2);
+    assertThat(updated.images()).extracting("originalName").containsExactly("a.png", "b.png");
+  }
+
+  @Test
+  void should_deleteSpecificImage_whenDeleteImageIdsGiven() {
+    PostResponse created = postService.create(
+        board.getId(), author.getId(), new PostCreateRequest("제목", "내용"),
+        List.of(pngImage("a.png"), pngImage("b.png")));
+    Long firstImageId = created.images().get(0).id();
+
+    PostResponse updated = postService.update(
+        created.id(), new PostUpdateRequest("제목", "내용", List.of(firstImageId)), null);
+
+    assertThat(updated.images()).hasSize(1);
+    assertThat(updated.images().get(0).originalName()).isEqualTo("b.png");
+  }
+
+  @Test
+  void should_deleteAndAddImages_atOnce() {
+    PostResponse created = postService.create(
+        board.getId(), author.getId(), new PostCreateRequest("제목", "내용"),
+        List.of(pngImage("a.png"), pngImage("b.png")));
+    Long firstImageId = created.images().get(0).id();
+
+    PostResponse updated = postService.update(
+        created.id(), new PostUpdateRequest("제목", "내용", List.of(firstImageId)),
+        List.of(pngImage("c.png")));
+
+    assertThat(updated.images()).hasSize(2);
+    assertThat(updated.images()).extracting("originalName").containsExactlyInAnyOrder("b.png", "c.png");
+  }
+
+  @Test
+  void should_ignoreForeignImageIds_whenDeleting() {
+    PostResponse created = postService.create(
+        board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), List.of(pngImage("a.png")));
+
+    PostResponse updated = postService.update(
+        created.id(), new PostUpdateRequest("제목", "내용", List.of(999999L)), null);
+
+    assertThat(updated.images()).hasSize(1);
+    assertThat(updated.images().get(0).originalName()).isEqualTo("a.png");
+  }
+
+  // 보안 회귀 방지: 다른 글의 "실제로 존재하는" 이미지 id를 삭제 목록에 넣어도
+  // 내 글에 없는 이미지이므로 무시되고, 그 다른 글의 이미지는 그대로 남아야 한다.
+  @Test
+  void should_notDeleteOtherPostsImage_whenForeignRealIdGiven() {
+    PostResponse mine = postService.create(
+        board.getId(), author.getId(), new PostCreateRequest("내글", "내용"), List.of(pngImage("mine.png")));
+    PostResponse other = postService.create(
+        board.getId(), author.getId(), new PostCreateRequest("남글", "내용"), List.of(pngImage("other.png")));
+    Long foreignImageId = other.images().get(0).id();
+
+    PostResponse updated = postService.update(
+        mine.id(), new PostUpdateRequest("내글", "내용", List.of(foreignImageId)), null);
+
+    // 내 글 이미지는 그대로, 남의 글 이미지도 삭제되지 않아야 한다
+    assertThat(updated.images()).hasSize(1);
+    assertThat(postService.getPost(other.id()).images()).hasSize(1);
+  }
+
+  @Test
+  void should_rejectUpdate_whenFinalImageCountExceedsMax() {
+    PostResponse created = postService.create(
+        board.getId(), author.getId(), new PostCreateRequest("제목", "내용"),
+        List.of(pngImage("a.png"), pngImage("b.png"), pngImage("c.png")));
+
+    List<org.springframework.web.multipart.MultipartFile> newImages =
+        List.of(pngImage("d.png"), pngImage("e.png"), pngImage("f.png"));
+
+    assertThatThrownBy(() -> postService.update(
+        created.id(), new PostUpdateRequest("제목", "내용", null), newImages))
+        .isInstanceOf(BusinessException.class)
+        .extracting(e -> ((BusinessException) e).getErrorCode())
+        .isEqualTo(com.example.board.global.exception.ErrorCode.FILE_COUNT_EXCEEDED);
+  }
+
+  private MockMultipartFile pngImage(String filename) {
+    return new MockMultipartFile("images", filename, MediaType.IMAGE_PNG_VALUE, new byte[] {1, 2, 3});
   }
 
   @Test

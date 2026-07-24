@@ -9,7 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 
 import com.example.board.auth.jwt.JwtTokenProvider;
 import com.example.board.board.Board;
@@ -28,7 +28,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -221,16 +223,12 @@ class SecurityIntegrationTest {
   }
 
   // 단계 6 소유권 메서드 보안: 작성자 본인은 수정 성공(@postSecurity.isAuthor → true).
+  // 단계 10: update가 multipart로 전환돼 본문은 "post"(application/json) 파트로 보낸다.
   @Test
   void should_return200_whenAuthorUpdatesPost() throws Exception {
-    String body = """
-        {"title": "수정 제목", "content": "수정 내용"}
-        """;
-
-    mockMvc.perform(put("/api/v1/posts/{id}", postId)
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + userToken)
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(body))
+    mockMvc.perform(multipart(HttpMethod.PUT, "/api/v1/posts/{id}", postId)
+            .file(postPart("수정 제목", "수정 내용"))
+            .header(HttpHeaders.AUTHORIZATION, "Bearer " + userToken))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.title").value("수정 제목"));
   }
@@ -238,14 +236,9 @@ class SecurityIntegrationTest {
   // 타인은 isAuthor → false → AccessDeniedException → 403 ACCESS_DENIED(POST_ACCESS_DENIED에서 통합됨).
   @Test
   void should_return403_whenNonAuthorUpdatesPost() throws Exception {
-    String body = """
-        {"title": "수정 제목", "content": "수정 내용"}
-        """;
-
-    mockMvc.perform(put("/api/v1/posts/{id}", postId)
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + otherToken)
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(body))
+    mockMvc.perform(multipart(HttpMethod.PUT, "/api/v1/posts/{id}", postId)
+            .file(postPart("수정 제목", "수정 내용"))
+            .header(HttpHeaders.AUTHORIZATION, "Bearer " + otherToken))
         .andExpect(status().isForbidden())
         .andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
   }
@@ -253,16 +246,19 @@ class SecurityIntegrationTest {
   // 없는 글은 isAuthor가 NotFoundException → 404(메서드 보안 단계에서도 404를 보존).
   @Test
   void should_return404_whenUpdatingMissingPost() throws Exception {
-    String body = """
-        {"title": "수정 제목", "content": "수정 내용"}
-        """;
-
-    mockMvc.perform(put("/api/v1/posts/{id}", 999999L)
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + userToken)
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(body))
+    mockMvc.perform(multipart(HttpMethod.PUT, "/api/v1/posts/{id}", 999999L)
+            .file(postPart("수정 제목", "수정 내용"))
+            .header(HttpHeaders.AUTHORIZATION, "Bearer " + userToken))
         .andExpect(status().isNotFound())
         .andExpect(jsonPath("$.code").value("POST_NOT_FOUND"));
+  }
+
+  private MockMultipartFile postPart(String title, String content) {
+    String json = """
+        {"title": "%s", "content": "%s"}
+        """.formatted(title, content);
+    return new MockMultipartFile(
+        "post", "post", MediaType.APPLICATION_JSON_VALUE, json.getBytes());
   }
 
   @Test

@@ -2,6 +2,7 @@ package com.example.board.post;
 
 import com.example.board.board.Board;
 import com.example.board.board.BoardRepository;
+import com.example.board.global.exception.BusinessException;
 import com.example.board.global.exception.ErrorCode;
 import com.example.board.global.exception.NotFoundException;
 import com.example.board.global.storage.FileStorageService;
@@ -12,7 +13,9 @@ import com.example.board.post.dto.PostUpdateRequest;
 import com.example.board.user.User;
 import com.example.board.user.UserRepository;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -25,6 +28,10 @@ import org.springframework.web.multipart.MultipartFile;
 @Service
 @RequiredArgsConstructor
 public class PostService {
+
+  // 게시글당 첨부 가능한 최대 이미지 장수(PostController.MAX_IMAGE_COUNT와 동일 정책).
+  // 수정 시 최종 개수(현재 - 삭제 + 신규)는 서비스만 알 수 있어 여기서 검증한다.
+  private static final int MAX_IMAGE_COUNT = 5;
 
   private final PostRepository postRepository;
   private final BoardRepository boardRepository;
@@ -79,12 +86,71 @@ public class PostService {
   }
 
   // 단계 6: 작성자 검사(권한)는 컨트롤러의 @PreAuthorize(@postSecurity)로 이동.
-  // 서비스는 비즈니스 로직(조회/수정)만 담당한다.
+  // 단계 10 처리에 의해 변경 — 이미지 개별 삭제(deleteImageIds) + 신규 추가(images)를 지원한다.
+  // 정합성 원칙:
+  //  - 장수 검증은 파일을 디스크에 저장하기 전에 수행한다(초과인데 저장하면 고아 파일 발생).
+  //  - 신규 파일 저장 중 실패하면 이번에 저장한 신규 파일만 best-effort 삭제한다.
+  //    (아직 커밋 전이라 삭제 예정인 기존 파일은 지우면 안 된다.)
+  //  - 삭제된 이미지의 물리 파일은 커밋 확정 후(afterCommit)에만 지운다(롤백 시 파일 선삭제 방지).
   @Transactional
-  public PostResponse update(Long id, PostUpdateRequest request) {
+  public PostResponse update(Long id, PostUpdateRequest request, List<MultipartFile> images) {
     Post post = findPost(id);
+
+    Set<Long> deleteIds = request.deleteImageIds() == null
+        ? Set.of()
+        : new HashSet<>(request.deleteImageIds());
+    int addCount = images == null ? 0 : images.size();
+    int deletableCount = countDeletable(post, deleteIds);
+    int finalCount = post.getImages().size() - deletableCount + addCount;
+    if (finalCount > MAX_IMAGE_COUNT) {
+      throw new BusinessException(ErrorCode.FILE_COUNT_EXCEEDED);
+    }
+
     post.update(request.title(), request.content());
+
+    // 남의 글/존재하지 않는 이미지 id는 removeImagesByIds에서 조용히 무시된다.
+    List<String> removedStoredNames = post.removeImagesByIds(deleteIds);
+
+    List<String> newStoredNames = new ArrayList<>();
+    try {
+      if (images != null && !images.isEmpty()) {
+        int order = nextSortOrder(post);
+        for (MultipartFile file : images) {
+          String storedName = fileStorageService.store(file);
+          newStoredNames.add(storedName);
+          post.addImage(new PostImage(
+              storedName, file.getOriginalFilename(), file.getContentType(), file.getSize(),
+              order++));
+        }
+      }
+    } catch (RuntimeException e) {
+      newStoredNames.forEach(fileStorageService::delete);
+      throw e;
+    }
+
+    if (!removedStoredNames.isEmpty()) {
+      TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+        @Override
+        public void afterCommit() {
+          removedStoredNames.forEach(fileStorageService::delete);
+        }
+      });
+    }
+
     return PostResponse.from(post);
+  }
+
+  private int countDeletable(Post post, Set<Long> deleteIds) {
+    if (deleteIds.isEmpty()) {
+      return 0;
+    }
+    return (int) post.getImages().stream()
+        .filter(image -> deleteIds.contains(image.getId()))
+        .count();
+  }
+
+  private int nextSortOrder(Post post) {
+    return post.getImages().stream().mapToInt(PostImage::getSortOrder).max().orElse(-1) + 1;
   }
 
   // 단계 10: 게시글 삭제 시 자식 PostImage 행은 cascade/orphanRemoval로 함께 지워지지만,

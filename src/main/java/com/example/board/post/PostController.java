@@ -23,7 +23,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -76,12 +75,20 @@ public class PostController {
 
   // 단계 6: 작성자만 수정/삭제 — URL 규칙으로 표현 못 하는 자원 소유권을 커스텀 보안 빈으로 검사.
   // 글이 없으면 @postSecurity.isAuthor가 404를 던지고, 작성자가 아니면 false → 403.
+  // 단계 10 처리에 의해 변경 — 이미지 수정 지원 위해 multipart 전환.
+  //   본문(title/content/deleteImageIds)은 "post" 파트(application/json), 신규 이미지는 "images" 파트로 받는다.
+  // 기존(JSON) 방식 보존:
+  //   @PutMapping("/posts/{id}")
+  //   public PostResponse update(@PathVariable Long id, @Valid @RequestBody PostUpdateRequest request) {
+  //     return postService.update(id, request);
+  //   }
   @PreAuthorize("@postSecurity.isAuthor(#id, authentication.principal)")
-  @PutMapping("/posts/{id}")
+  @PutMapping(path = "/posts/{id}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public PostResponse update(
       @PathVariable Long id,
-      @Valid @RequestBody PostUpdateRequest request) {
-    return postService.update(id, request);
+      @Valid @RequestPart("post") PostUpdateRequest request,
+      @RequestPart(value = "images", required = false) List<MultipartFile> images) {
+    return postService.update(id, request, images);
   }
 
   @PreAuthorize("@postSecurity.isAuthor(#id, authentication.principal)")

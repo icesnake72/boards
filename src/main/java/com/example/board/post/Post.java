@@ -18,6 +18,7 @@ import jakarta.persistence.OrderBy;
 import jakarta.persistence.Table;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -79,6 +80,21 @@ public class Post extends BaseTimeEntity {
   public void addImage(PostImage image) {
     images.add(image);
     image.assignPost(this);
+  }
+
+  // 단계 10: 지정한 id의 이미지를 이 글에서 제거한다(orphanRemoval로 커밋 시 DB DELETE).
+  // 이 글에 속하지 않는 id는 조용히 무시하고, 제거된 이미지의 storedName을 반환해
+  // 호출자가 물리 파일을 커밋 후 정리할 수 있게 한다.
+  // 순회 중 remove로 인한 ConcurrentModificationException을 피하려고 대상을 먼저 수집한다.
+  public List<String> removeImagesByIds(Set<Long> ids) {
+    if (ids == null || ids.isEmpty()) {
+      return List.of();
+    }
+    List<PostImage> targets = images.stream()
+        .filter(image -> ids.contains(image.getId()))
+        .toList();
+    images.removeAll(targets);
+    return targets.stream().map(PostImage::getStoredName).toList();
   }
 
   public void increaseViewCount() {
