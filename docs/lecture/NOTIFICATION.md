@@ -663,7 +663,7 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
 
 ---
 
-## 6. 파일 요약 (예정 산출물)
+## 6. 파일 요약
 
 **신규 (제안)**:
 
@@ -705,6 +705,102 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
 | 인가 | 목록/카운트: `WHERE recipient_id = :자신` 필터로 조용히 차단. 개별 읽음: 소유 검증 실패 시 403이 아니라 **404**(열거 방어) |
 | 확장 옵션 | 리스너 무거워지면 `@Async`로 분리 가능(응답 지연 없음, 유실 위험 증가) — 강의는 동기 REQUIRES_NEW를 기본 |
 | 단계 10과의 연결 | `PostService.delete`가 손수 등록했던 `TransactionSynchronizationManager.registerSynchronization(afterCommit)`을 정식 이벤트로 승격. 분리·재사용·다중 리스너 확장이 자연스러워짐 |
+
+---
+
+## curl로 실습하기 — 알림 시나리오
+
+> [!IMPORTANT]
+> 알림은 **"남이 댓글을 달 때만"** 생긴다(자기 자신 제외, §4). 그래서 한 계정으로는 테스트가 안 되고 **두 계정(글 작성자 A, 댓글 작성자 B)** 이 필요하다. "내 글에 내가 댓글 달고 알림을 기다리는" 것이 가장 흔한 착오다.
+
+앱이 기동된 상태(MySQL 포함)를 전제로 한다. `POST_ID`는 A가 쓴 게시글 id로 바꾼다.
+
+### 준비 — 두 계정 + 토큰
+
+```bash
+B=http://localhost:8090/api/v1
+
+# A(alice), B(bob) 회원가입 — 이미 있으면 생략
+curl -s -X POST $B/auth/signup -H 'Content-Type: application/json' \
+  -d '{"username":"alice","email":"alice@example.com","password":"password123"}'
+curl -s -X POST $B/auth/signup -H 'Content-Type: application/json' \
+  -d '{"username":"bob","email":"bob@example.com","password":"password123"}'
+
+# 각자 토큰
+A_TOKEN=$(curl -s -X POST $B/auth/login -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"password123"}' | jq -r .accessToken)
+B_TOKEN=$(curl -s -X POST $B/auth/login -H 'Content-Type: application/json' \
+  -d '{"username":"bob","password":"password123"}' | jq -r .accessToken)
+```
+
+### 알림 발생 — B가 A의 글에 댓글
+
+```bash
+# B가 A의 게시글에 댓글 → A에게 COMMENT_ON_POST 알림 생성
+#   (AFTER_COMMIT + REQUIRES_NEW라 댓글 커밋 직후 동기로 저장됨 — 201 받은 뒤 바로 조회하면 보인다)
+curl -s -X POST $B/posts/POST_ID/comments \
+  -H "Authorization: Bearer $B_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"content":"밥이 남긴 댓글"}'
+```
+
+### A가 자기 알림 조회 (인증 필요)
+
+```bash
+# 안 읽은 개수 (배지용)
+curl -s $B/notifications/unread-count -H "Authorization: Bearer $A_TOKEN"
+# → {"count":1}
+
+# 목록 (최신순 페이징) — message는 메타데이터에서 렌더된 문구
+curl -s "$B/notifications?page=0&size=20" -H "Authorization: Bearer $A_TOKEN"
+# → {"content":[
+#      {"id":1,"type":"COMMENT_ON_POST","message":"bob님이 회원님의 게시글에 댓글을 남겼습니다",
+#       "actorUsername":"bob","postId":POST_ID,"commentId":..,"read":false,"createdAt":"..."}
+#    ], "page":{...}}
+```
+
+### 읽음 처리 — 개별 / 전체 (204 No Content)
+
+```bash
+# 개별 읽음 (알림 id)
+curl -s -o /dev/null -w "HTTP %{http_code}\n" -X PATCH $B/notifications/1/read \
+  -H "Authorization: Bearer $A_TOKEN"
+
+# 전체 읽음
+curl -s -o /dev/null -w "HTTP %{http_code}\n" -X PATCH $B/notifications/read-all \
+  -H "Authorization: Bearer $A_TOKEN"
+
+# 다시 카운트 → 0
+curl -s $B/notifications/unread-count -H "Authorization: Bearer $A_TOKEN"
+# → {"count":0}
+```
+
+### 대댓글 알림 & 인가 확인
+
+```bash
+# (대댓글 알림) A가 B의 댓글에 답글 → B에게 REPLY_ON_COMMENT 알림. COMMENT_ID = B가 단 댓글 id
+curl -s -X POST $B/posts/POST_ID/comments \
+  -H "Authorization: Bearer $A_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"content":"앨리스의 답글","parentId":COMMENT_ID}'
+# → 이제 B_TOKEN으로 /notifications 조회하면 REPLY_ON_COMMENT 알림이 보인다
+
+# (남의 알림 읽기 차단) B가 A의 알림 id를 읽으려 하면 404로 은폐(§5)
+curl -s -o /dev/null -w "HTTP %{http_code}\n" -X PATCH $B/notifications/1/read \
+  -H "Authorization: Bearer $B_TOKEN"
+# → 404 (남의 알림은 존재조차 숨긴다)
+```
+
+### 검증 시나리오 요약
+
+| 확인할 것 | 방법 | 기대 |
+|---|---|---|
+| 게시글 댓글 알림 | B가 A 글에 댓글 | A 목록에 `COMMENT_ON_POST` |
+| 대댓글 알림 | A가 B 댓글에 답글 | B 목록에 `REPLY_ON_COMMENT` |
+| 자기 자신 제외 | A가 자기 글에 댓글 | A의 unread-count **안 늘어남** |
+| 읽음/카운트 | read 후 재조회 | unread-count 0 |
+| 인가(IDOR 방어) | B가 A 알림 읽기 시도 | 404 |
+
+> [!TIP]
+> 알림이 안 보이면 대개 **자기 자신에게 댓글을 단 경우**다. A의 글에는 반드시 **B 토큰**으로 댓글을 달아야 A에게 알림이 간다. 그리고 조회/읽음 API는 전부 `Authorization: Bearer` 토큰이 필요하다(누락 시 401).
 
 ---
 
