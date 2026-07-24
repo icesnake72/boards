@@ -604,6 +604,32 @@ private List<PostImage> images = new ArrayList<>();
 
 만약 컨트롤러에서 Entity를 반환하고 Jackson이 밖에서 LAZY 필드를 건드리는 구조였다면 이 조합은 곧장 `LazyInitializationException`으로 깨진다. **DTO 변환 지점을 트랜잭션 경계 안으로 유지하는 것**이 open-in-view=false 환경의 대원칙이다.
 
+#### 단건 조회에 붙은 조회수 정책 — 남이 볼 때만 증가
+
+단건 조회(`getPost`)는 이미지 로딩과 함께 **조회수 증가**도 담당하는데, 여기에 "본인 글 조회는 세지 않는다"는 규칙이 걸려 있다. 조회자가 작성자가 아닐 때만 올린다:
+
+```java
+@Transactional
+public PostResponse getPost(Long id, Long viewerId) {
+  Post post = findPost(id);
+  if (!post.isAuthor(viewerId)) {   // 작성자가 아니면(= 남이면) 증가
+    post.increaseViewCount();
+  }
+  return PostResponse.from(post);
+}
+```
+
+`GET /posts/{id}`는 permitAll이라 비로그인도 조회한다. 컨트롤러가 `@AuthenticationPrincipal`로 조회자를 받는데, **비로그인이면 null**(익명 principal은 `CustomUserDetails` 타입이 아니므로 주입되지 않음)이다. `Post.isAuthor(null)`은 `author.getId().equals(null)` → `false`이므로, 별도 null 분기 없이 **비로그인은 자연히 "남"으로 취급되어 증가**한다.
+
+| 조회자 | `isAuthor(viewerId)` | 조회수 |
+|--------|----------------------|--------|
+| 남(다른 로그인 사용자) | false | 증가 |
+| 본인(작성자) | true | 증가 안 함 |
+| 비로그인(null) | false | 증가 |
+
+> [!NOTE]
+> 이 조회수 증가는 `viewCount = viewCount + 1`을 읽고-쓰는 dirty checking 방식이라 **동시 조회 시 카운트 유실**이 가능하고, 같은 사람의 반복 조회도 매번 센다. 정밀한 카운팅(원자적 `UPDATE ... SET view_count = view_count + 1`)이나 중복 방지(조회 이력)는 이 단계의 범위 밖 — 운영 최적화 주제다.
+
 ---
 
 ## 7. 테스트 전략
@@ -666,7 +692,7 @@ void should_createPostWithImages_andExposeUrlsOnGet() {
   assertThat(created.images()).hasSize(1);
   assertThat(created.images().get(0).url()).startsWith("/images/");
 
-  PostResponse fetched = postService.getPost(created.id());
+  PostResponse fetched = postService.getPost(created.id(), null); // viewerId=null(비로그인)
   assertThat(fetched.images()).hasSize(1);
   assertThat(fetched.images().get(0).url()).isEqualTo(created.images().get(0).url());
 }
@@ -752,3 +778,4 @@ void should_createPostWithImages_andExposeUrlsOnGet() {
 | 왜 컬렉션까지 fetch join 하면 안 되나(목록에서)? | 두 가지 함정. (1) `Page<>` + `join fetch p.images`는 Hibernate가 페이징을 DB에 넘기지 못해 **메모리 페이징**으로 fallback한다(전체를 로딩 후 잘라냄). (2) 컬렉션 두 개(`images` + `comments` 등)를 동시에 fetch join하면 `MultipleBagFetchException`이 난다. 그래서 목록은 ToOne만 `@EntityGraph`로 join하고, 컬렉션은 `@BatchSize`로 IN 쿼리 배치 로딩한다. 단건은 컬렉션이 하나뿐이고 페이징도 없으므로 fetch join + distinct가 안전. |
 | 크기 초과 응답이 왜 413인가? | 서블릿이 `max-file-size` 초과 시 `MaxUploadSizeExceededException`을 던지고, `GlobalExceptionHandler`가 이를 `PAYLOAD_TOO_LARGE(413)`로 매핑한다. `MaxUploadSizeExceededException`은 `MultipartException`의 하위이므로 등록 순서상 크기 핸들러가 먼저 매칭되도록 두어야 원인이 흐려지지 않는다. |
 | open-in-view를 왜 false로 두나 — LAZY 접근이 안 깨지나? | 컨트롤러에서 Entity를 그대로 반환해 Jackson이 밖에서 LAZY를 건드리는 구조라면 깨진다. 이 프로젝트는 서비스가 반환 직전에 DTO 변환(`PostResponse.from` / `PostListResponse.from`)을 하므로 LAZY 접근이 **트랜잭션 경계 안**에서 일어난다. `@BatchSize`도 이 시점에 발동한다. DTO 변환 지점을 트랜잭션 안에 두는 것이 open-in-view=false의 대원칙. |
+| 조회수는 언제 증가하나 — 본인 글도 세나? | 남이 볼 때만 증가하고 본인 글 조회는 세지 않는다. `getPost(id, viewerId)`가 `post.isAuthor(viewerId)`가 아닐 때만 `increaseViewCount()`를 호출한다. `GET /posts/{id}`는 permitAll이라 비로그인 조회자는 `viewerId=null`인데, `isAuthor(null)`이 false라 비로그인은 "남"으로 취급되어 증가한다(§6 참고). 동시 조회 시 카운트 유실·같은 사람 반복 조회 중복은 이 단계에서 다루지 않는다(운영 최적화 영역). |
