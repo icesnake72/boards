@@ -72,7 +72,7 @@ class CommentServiceTest {
 
     assertThat(reply.content()).isEqualTo("대댓글");
 
-    Page<CommentResponse> page = commentService.getComments(postId, PageRequest.of(0, 10));
+    Page<CommentResponse> page = commentService.getComments(postId, null, PageRequest.of(0, 10));
     assertThat(page.getContent()).hasSize(1);
     assertThat(page.getContent().get(0).children()).hasSize(1);
     assertThat(page.getContent().get(0).children().get(0).content()).isEqualTo("대댓글");
@@ -127,7 +127,7 @@ class CommentServiceTest {
     commentService.delete(root.id());
 
     CommentResponse fetched =
-        commentService.getComments(postId, PageRequest.of(0, 10)).getContent().get(0);
+        commentService.getComments(postId, null, PageRequest.of(0, 10)).getContent().get(0);
     assertThat(fetched.deleted()).isTrue();
     assertThat(fetched.content()).isEqualTo("삭제된 댓글입니다");
   }
@@ -141,7 +141,7 @@ class CommentServiceTest {
     commentService.delete(root.id());
 
     CommentResponse fetched =
-        commentService.getComments(postId, PageRequest.of(0, 10)).getContent().get(0);
+        commentService.getComments(postId, null, PageRequest.of(0, 10)).getContent().get(0);
     assertThat(fetched.deleted()).isTrue();
     assertThat(fetched.content()).isEqualTo("삭제된 댓글입니다");
     assertThat(fetched.children()).hasSize(1);
@@ -157,7 +157,7 @@ class CommentServiceTest {
     commentService.create(postId, author.getId(), new CommentCreateRequest("대댓글1-1", root1.id()));
     commentService.create(postId, author.getId(), new CommentCreateRequest("대댓글1-2", root1.id()));
 
-    Page<CommentResponse> page = commentService.getComments(postId, PageRequest.of(0, 10));
+    Page<CommentResponse> page = commentService.getComments(postId, null, PageRequest.of(0, 10));
 
     assertThat(page.getTotalElements()).isEqualTo(2);
     CommentResponse fetchedRoot1 = page.getContent().stream()
@@ -181,7 +181,7 @@ class CommentServiceTest {
     commentService.create(postId, replier.getId(), new CommentCreateRequest("replier의 대댓글", root.id()));
 
     CommentResponse fetchedRoot =
-        commentService.getComments(postId, PageRequest.of(0, 10)).getContent().get(0);
+        commentService.getComments(postId, null, PageRequest.of(0, 10)).getContent().get(0);
 
     assertThat(fetchedRoot.children()).extracting(CommentResponse::authorUsername)
         .containsExactly("author1", "replier1");
@@ -193,7 +193,7 @@ class CommentServiceTest {
         commentService.create(postId, author.getId(), new CommentCreateRequest("원본", null));
 
     CommentResponse updated =
-        commentService.update(root.id(), new CommentUpdateRequest("수정됨"));
+        commentService.update(root.id(), author.getId(), new CommentUpdateRequest("수정됨"));
 
     assertThat(updated.content()).isEqualTo("수정됨");
   }
@@ -205,7 +205,7 @@ class CommentServiceTest {
     commentService.delete(root.id());
 
     assertThatThrownBy(() ->
-        commentService.update(root.id(), new CommentUpdateRequest("수정 시도")))
+        commentService.update(root.id(), author.getId(), new CommentUpdateRequest("수정 시도")))
         .isInstanceOf(BusinessException.class)
         .extracting(e -> ((BusinessException) e).getErrorCode())
         .isEqualTo(ErrorCode.CANNOT_EDIT_DELETED);

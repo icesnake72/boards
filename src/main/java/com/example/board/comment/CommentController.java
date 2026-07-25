@@ -41,12 +41,15 @@ public class CommentController {
   }
 
   // 조회는 공개 — GET /api/v1/posts/** permitAll 규칙에 이미 포함된다(SecurityConfig).
+  // 단계 13: 로그인 사용자면 principal이 주입되어 myReaction을 채운다(비로그인은 null).
   @GetMapping("/posts/{postId}/comments")
   public Page<CommentResponse> getComments(
       @PathVariable Long postId,
+      @AuthenticationPrincipal CustomUserDetails userDetails,
       @PageableDefault(size = 10, sort = "createdAt", direction = Sort.Direction.DESC)
       Pageable pageable) {
-    return commentService.getComments(postId, pageable);
+    Long viewerId = userDetails == null ? null : userDetails.getId();
+    return commentService.getComments(postId, viewerId, pageable);
   }
 
   // 작성자만 수정 — 댓글이 없으면 @commentSecurity가 404, 작성자가 아니면 false → 403.
@@ -54,8 +57,9 @@ public class CommentController {
   @PutMapping("/comments/{id}")
   public CommentResponse update(
       @PathVariable Long id,
+      @AuthenticationPrincipal CustomUserDetails userDetails,
       @Valid @RequestBody CommentUpdateRequest request) {
-    return commentService.update(id, request);
+    return commentService.update(id, userDetails.getId(), request);
   }
 
   @PreAuthorize("@commentSecurity.isAuthor(#id, authentication.principal)")

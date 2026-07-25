@@ -62,7 +62,7 @@ class PostServiceTest {
         postService.create(board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), null);
 
     PostResponse updated = postService.update(
-        created.id(), new PostUpdateRequest("수정 제목", "수정 내용", null), null);
+        created.id(), author.getId(), new PostUpdateRequest("수정 제목", "수정 내용", null), null);
 
     assertThat(updated.title()).isEqualTo("수정 제목");
     assertThat(updated.content()).isEqualTo("수정 내용");
@@ -74,7 +74,7 @@ class PostServiceTest {
         board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), List.of(pngImage("a.png")));
 
     PostResponse updated = postService.update(
-        created.id(), new PostUpdateRequest("제목", "내용", null), List.of(pngImage("b.png")));
+        created.id(), author.getId(), new PostUpdateRequest("제목", "내용", null), List.of(pngImage("b.png")));
 
     assertThat(updated.images()).hasSize(2);
     assertThat(updated.images()).extracting("originalName").containsExactly("a.png", "b.png");
@@ -88,7 +88,7 @@ class PostServiceTest {
     Long firstImageId = created.images().get(0).id();
 
     PostResponse updated = postService.update(
-        created.id(), new PostUpdateRequest("제목", "내용", List.of(firstImageId)), null);
+        created.id(), author.getId(), new PostUpdateRequest("제목", "내용", List.of(firstImageId)), null);
 
     assertThat(updated.images()).hasSize(1);
     assertThat(updated.images().get(0).originalName()).isEqualTo("b.png");
@@ -102,7 +102,7 @@ class PostServiceTest {
     Long firstImageId = created.images().get(0).id();
 
     PostResponse updated = postService.update(
-        created.id(), new PostUpdateRequest("제목", "내용", List.of(firstImageId)),
+        created.id(), author.getId(), new PostUpdateRequest("제목", "내용", List.of(firstImageId)),
         List.of(pngImage("c.png")));
 
     assertThat(updated.images()).hasSize(2);
@@ -115,7 +115,7 @@ class PostServiceTest {
         board.getId(), author.getId(), new PostCreateRequest("제목", "내용"), List.of(pngImage("a.png")));
 
     PostResponse updated = postService.update(
-        created.id(), new PostUpdateRequest("제목", "내용", List.of(999999L)), null);
+        created.id(), author.getId(), new PostUpdateRequest("제목", "내용", List.of(999999L)), null);
 
     assertThat(updated.images()).hasSize(1);
     assertThat(updated.images().get(0).originalName()).isEqualTo("a.png");
@@ -132,7 +132,7 @@ class PostServiceTest {
     Long foreignImageId = other.images().get(0).id();
 
     PostResponse updated = postService.update(
-        mine.id(), new PostUpdateRequest("내글", "내용", List.of(foreignImageId)), null);
+        mine.id(), author.getId(), new PostUpdateRequest("내글", "내용", List.of(foreignImageId)), null);
 
     // 내 글 이미지는 그대로, 남의 글 이미지도 삭제되지 않아야 한다
     assertThat(updated.images()).hasSize(1);
@@ -149,7 +149,7 @@ class PostServiceTest {
         List.of(pngImage("d.png"), pngImage("e.png"), pngImage("f.png"));
 
     assertThatThrownBy(() -> postService.update(
-        created.id(), new PostUpdateRequest("제목", "내용", null), newImages))
+        created.id(), author.getId(), new PostUpdateRequest("제목", "내용", null), newImages))
         .isInstanceOf(BusinessException.class)
         .extracting(e -> ((BusinessException) e).getErrorCode())
         .isEqualTo(com.example.board.global.exception.ErrorCode.FILE_COUNT_EXCEEDED);

@@ -92,9 +92,10 @@ public class PostController {
   @PutMapping(path = "/posts/{id}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public PostResponse update(
       @PathVariable Long id,
+      @AuthenticationPrincipal CustomUserDetails userDetails,
       @Valid @RequestPart("post") PostUpdateRequest request,
       @RequestPart(value = "images", required = false) List<MultipartFile> images) {
-    return postService.update(id, request, images);
+    return postService.update(id, userDetails.getId(), request, images);
   }
 
   @PreAuthorize("@postSecurity.isAuthor(#id, authentication.principal)")

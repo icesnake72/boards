@@ -10,6 +10,8 @@ import com.example.board.post.dto.PostCreateRequest;
 import com.example.board.post.dto.PostListResponse;
 import com.example.board.post.dto.PostResponse;
 import com.example.board.post.dto.PostUpdateRequest;
+import com.example.board.reaction.PostReactionSummary;
+import com.example.board.reaction.ReactionService;
 import com.example.board.user.User;
 import com.example.board.user.UserRepository;
 import java.util.ArrayList;
@@ -37,6 +39,7 @@ public class PostService {
   private final BoardRepository boardRepository;
   private final UserRepository userRepository;
   private final FileStorageService fileStorageService;
+  private final ReactionService reactionService;
 
   @Transactional(readOnly = true)
   public Page<PostListResponse> getPosts(Long boardId, Pageable pageable) {
@@ -71,7 +74,8 @@ public class PostService {
         }
       }
       Post saved = postRepository.save(post);
-      return PostResponse.from(saved);
+      // 방금 만든 글은 반응이 없으므로 0/0/null.
+      return PostResponse.from(saved, 0, 0, null);
     } catch (RuntimeException e) {
       storedNames.forEach(fileStorageService::delete);
       throw e;
@@ -87,7 +91,9 @@ public class PostService {
     if (!post.isAuthor(viewerId)) {
       post.increaseViewCount(); // dirty checking으로 트랜잭션 커밋 시 UPDATE 실행
     }
-    return PostResponse.from(post);
+    PostReactionSummary reaction = reactionService.getPostReaction(id, viewerId);
+    return PostResponse.from(
+        post, reaction.likeCount(), reaction.dislikeCount(), reaction.myReaction());
   }
 
   // 단계 6: 작성자 검사(권한)는 컨트롤러의 @PreAuthorize(@postSecurity)로 이동.
@@ -98,7 +104,8 @@ public class PostService {
   //    (아직 커밋 전이라 삭제 예정인 기존 파일은 지우면 안 된다.)
   //  - 삭제된 이미지의 물리 파일은 커밋 확정 후(afterCommit)에만 지운다(롤백 시 파일 선삭제 방지).
   @Transactional
-  public PostResponse update(Long id, PostUpdateRequest request, List<MultipartFile> images) {
+  public PostResponse update(
+      Long id, Long viewerId, PostUpdateRequest request, List<MultipartFile> images) {
     Post post = findPost(id);
 
     Set<Long> deleteIds = request.deleteImageIds() == null
@@ -142,7 +149,11 @@ public class PostService {
       });
     }
 
-    return PostResponse.from(post);
+    // 수정 시점의 반응 현황을 함께 반환(수정으로 반응이 바뀌진 않지만 응답 일관성 유지).
+    // viewerId(=작성자)를 넘겨 myReaction까지 정확히 채운다.
+    PostReactionSummary reaction = reactionService.getPostReaction(id, viewerId);
+    return PostResponse.from(
+        post, reaction.likeCount(), reaction.dislikeCount(), reaction.myReaction());
   }
 
   private int countDeletable(Post post, Set<Long> deleteIds) {
