@@ -1,3 +1,11 @@
+---
+step: 12
+track: domain
+tags: [domain, notification, event]
+requires: ["[[COMMENT]]", "[[FILE-UPLOAD]]"]
+status: 완료
+---
+
 # 댓글 알림 — 이벤트 기반 인앱 알림 (단계 12, 설계안)
 
 - **과정명**: 강의용 Spring Boot 게시판 — 단계 12 (댓글 알림)

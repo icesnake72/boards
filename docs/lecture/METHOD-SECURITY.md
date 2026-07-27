@@ -1,3 +1,11 @@
+---
+step: 6
+track: auth
+tags: [auth, authorization]
+requires: ["[[SPRING-SECURITY-STANDARD]]", "[[SECURITY-FILTER-CHAIN]]"]
+status: 완료
+---
+
 # 메서드 보안 — @PreAuthorize와 자원 소유권 인가 (단계 6)
 
 **과정명**: 강의용 Spring Boot 게시판 — 단계 6 (메서드 보안)

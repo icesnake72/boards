@@ -1,3 +1,10 @@
+---
+step: 7
+track: oauth2
+tags: [oauth2, workplan]
+requires: ["[[OAUTH2-KAKAO]]"]
+---
+
 # 단계 7 작업 순서 — 카카오 OAuth2 (진행 현황 + 남은 작업)
 
 **작성일**: 2026-07-03

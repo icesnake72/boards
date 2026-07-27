@@ -1,3 +1,10 @@
+---
+step: 1
+track: overview
+tags: [overview, student]
+status: 완료
+---
+
 # 학생용 — Spring Boot 게시판 만들기 [단계 1]
 
 **기술 스택**: Spring Boot 3.5.15, Java 21, Spring Data JPA, Spring Security(BCrypt only), MySQL 8 / 테스트 H2

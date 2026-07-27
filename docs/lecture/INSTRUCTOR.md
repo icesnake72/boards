@@ -1,3 +1,10 @@
+---
+step: 1
+track: overview
+tags: [overview, instructor]
+status: 완료
+---
+
 # 강의 자료 (강사용) — Spring Boot 게시판 만들기 [단계 1]
 
 **과정명**: 입문자를 위한 Spring Boot 게시판 — 계층 구조 / JPA 단방향 연관관계 / HTTP 세션 인증

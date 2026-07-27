@@ -1,3 +1,10 @@
+---
+type: 보조이론
+track: auth
+tags: [auth, theory, filter]
+requires: ["[[JWT-AUTH]]"]
+---
+
 # Spring Security Filter Chain — 구성과 실행 순서
 
 **과정명**: 강의용 Spring Boot 게시판 — 단계 2 (JWT)

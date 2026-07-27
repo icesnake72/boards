@@ -1,3 +1,11 @@
+---
+step: 7
+track: oauth2
+tags: [oauth2, kakao]
+requires: ["[[SPRING-SECURITY-STANDARD]]", "[[REFRESH-TOKEN]]", "[[HTTPONLY-COOKIE]]"]
+status: 완료
+---
+
 # OAuth 2.0 — 카카오 로그인 수동 구현 (단계 7)
 
 - **과정명**: 강의용 Spring Boot 게시판 — 단계 7 (OAuth 2.0 / 카카오)

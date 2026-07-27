@@ -1,3 +1,11 @@
+---
+step: 9
+track: oauth2
+tags: [oauth2, oidc]
+requires: ["[[OAUTH2-CLIENT]]", "[[JWT-AUTH]]"]
+status: 완료
+---
+
 # OIDC — OAuth2 위의 인증 계층 (단계 9)
 
 - **과정명**: 강의용 Spring Boot 게시판 — 단계 9 (OIDC 전환)

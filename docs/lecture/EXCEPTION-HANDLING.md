@@ -1,3 +1,9 @@
+---
+type: 보조이론
+track: common
+tags: [common, theory, exception]
+---
+
 # 예외 처리와 HTTP 응답 코드 반환 — 보조 이론 강의
 
 **과정명**: 강의용 Spring Boot 게시판 — 예외 처리 이론 보강

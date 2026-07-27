@@ -1,3 +1,11 @@
+---
+step: 5
+track: auth
+tags: [auth, cookie, security]
+requires: ["[[REFRESH-TOKEN]]", "[[HTTP-SESSION]]"]
+status: 완료
+---
+
 # httpOnly 쿠키 — Refresh Token 안전한 전달 (단계 5)
 
 **과정명**: 강의용 Spring Boot 게시판 — 단계 5 (refresh token을 쿠키로)

@@ -1,3 +1,9 @@
+---
+type: 보조이론
+track: auth
+tags: [auth, theory, session]
+---
+
 # HTTP 프로토콜과 HttpSession — 보조 이론 강의
 
 **과정명**: 강의용 Spring Boot 게시판 — HTTP & Session 이론 보강

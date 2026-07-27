@@ -1,3 +1,11 @@
+---
+step: 11
+track: domain
+tags: [domain, comment, jpa]
+requires: ["[[METHOD-SECURITY]]", "[[FILE-UPLOAD]]"]
+status: 완료
+---
+
 # 댓글 + 대댓글(1단계) — 자기참조 연관과 soft delete (단계 11)
 
 - **과정명**: 강의용 Spring Boot 게시판 — 단계 11 (댓글/대댓글)

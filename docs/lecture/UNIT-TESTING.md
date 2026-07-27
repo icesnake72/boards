@@ -1,3 +1,10 @@
+---
+type: 보조실습
+track: test
+tags: [test]
+requires: ["[[TESTING-GUIDE]]"]
+---
+
 # 단위·통합 테스트 작성법 — 초급에서 중급까지
 
 - **과정명**: 강의용 Spring Boot 게시판 — 테스트 코드 **작성** 강의

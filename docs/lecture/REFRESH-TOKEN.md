@@ -1,3 +1,11 @@
+---
+step: 4
+track: auth
+tags: [auth, jwt, token]
+requires: ["[[JWT-AUTH]]", "[[SPRING-SECURITY-STANDARD]]"]
+status: 완료
+---
+
 # Refresh Token — Access/Refresh 분리와 DB 저장 (단계 4)
 
 **과정명**: 강의용 Spring Boot 게시판 — 단계 4 (refresh token 도입)

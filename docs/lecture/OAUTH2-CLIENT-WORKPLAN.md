@@ -1,3 +1,10 @@
+---
+step: 8
+track: oauth2
+tags: [oauth2, workplan]
+requires: ["[[OAUTH2-CLIENT]]"]
+---
+
 # 단계 8 작업 순서 — OAuth 표준화 (spring-boot-starter-oauth2-client)
 
 **작성일**: 2026-07-04

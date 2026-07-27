@@ -1,3 +1,11 @@
+---
+step: 2
+track: auth
+tags: [auth, jwt]
+requires: ["[[HTTP-SESSION]]"]
+status: 완료
+---
+
 # JWT 기반 인증 구현 — 클래스별 역할과 작업 순서
 
 **과정명**: 강의용 Spring Boot 게시판 — 단계 2 (세션 → JWT 전환)

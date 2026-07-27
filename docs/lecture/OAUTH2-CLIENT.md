@@ -1,3 +1,11 @@
+---
+step: 8
+track: oauth2
+tags: [oauth2]
+requires: ["[[OAUTH2-KAKAO]]"]
+status: 완료
+---
+
 # OAuth 표준화 — spring-boot-starter-oauth2-client (단계 8)
 
 - **과정명**: 강의용 Spring Boot 게시판 — 단계 8 (OAuth 표준화)

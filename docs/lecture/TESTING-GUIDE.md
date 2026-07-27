@@ -1,3 +1,9 @@
+---
+type: 보조실습
+track: test
+tags: [test, reference]
+---
+
 # 테스트 코드 작성과 실행 — 보조 실습 강의
 
 **과정명**: 강의용 Spring Boot 게시판 — 테스트 작성/실행 가이드

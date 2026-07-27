@@ -1,3 +1,11 @@
+---
+step: 3
+track: auth
+tags: [auth, security]
+requires: ["[[JWT-AUTH]]", "[[SECURITY-FILTER-CHAIN]]"]
+status: 완료
+---
+
 # Spring Security 표준 인증/인가 — 클래스별 역할과 전환 (단계 3)
 
 **과정명**: 강의용 Spring Boot 게시판 — 단계 3 (수동 JWT → Spring Security 표준)

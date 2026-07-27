@@ -1,3 +1,9 @@
+---
+type: 참조
+track: reference
+tags: [reference, curl]
+---
+
 # curl 테스트 가이드 — 전체 API & 에러 응답 (단계 3: Spring Security 표준)
 
 **과정명**: 강의용 Spring Boot 게시판 — JWT + Spring Security 표준 통합 테스트

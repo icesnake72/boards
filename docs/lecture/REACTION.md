@@ -1,3 +1,11 @@
+---
+step: 13
+track: domain
+tags: [domain, reaction, jpa]
+requires: ["[[COMMENT]]", "[[FILE-UPLOAD]]"]
+status: 완료
+---
+
 # 좋아요·싫어요 — 유튜브식 토글 반응 (단계 13)
 
 - **과정명**: 강의용 Spring Boot 게시판 — 단계 13 (반응 · 게시글/댓글 좋아요·싫어요)

@@ -1,3 +1,11 @@
+---
+step: 10
+track: domain
+tags: [domain, file, multipart]
+requires: ["[[SPRING-SECURITY-STANDARD]]", "[[EXCEPTION-HANDLING]]"]
+status: 완료
+---
+
 # 게시글 이미지 업로드 — multipart + 정적 서빙 (단계 10)
 
 - **과정명**: 강의용 Spring Boot 게시판 — 단계 10 (파일 업로드)
