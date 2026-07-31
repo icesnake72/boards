@@ -289,6 +289,70 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
 > **세션 흐름과 대응**: 단계 1에서 "JSESSIONID 쿠키로 세션을 찾아 userId 확인"하던 일을, 여기서는 "Bearer 토큰을 검증해 userId 확인"으로 대체한다. 둘 다 결과는 같다 — **request에 userId를 준비해 둔다.**
 
+#### 이후 보강 — 필터 예외는 `GlobalExceptionHandler`의 사각지대
+
+> [!NOTE]
+> 위 코드는 단계 2 초기 버전이다. 단계 3에서 이 필터는 request attribute 대신 **`SecurityContext`에 표준 `Authentication`을 심는 방식**으로 표준화됐다([[SPRING-SECURITY-STANDARD]] 참고). 아래 예외 처리 함정은 그 표준 버전에서 드러나 이후 보강한 내용이다.
+
+기본 필터는 예외를 전혀 다루지 않았는데, 여기에 **"내부 오류가 401로 둔갑하는"** 함정이 있다. 원리부터:
+
+**`@RestControllerAdvice`(`GlobalExceptionHandler`)는 `DispatcherServlet` 레벨에서만 동작한다.** 필터는 그보다 앞단이라, 필터에서 던진 예외는 GlobalExceptionHandler가 절대 못 잡는다. 필터 예외의 행선지는 정해져 있다:
+
+| 필터에서 던진 예외 | 처리 결과 |
+|---|---|
+| `AuthenticationException` 계열 | `ExceptionTranslationFilter` → `authenticationEntryPoint`(**401**) |
+| `AccessDeniedException` | → `accessDeniedHandler`(403) |
+| 그 외 (진짜 내부 오류) | 컨테이너 → 500 (표준 `ErrorResponse` 우회) |
+
+문제는 두 지점에서 터졌다:
+1. **`validateToken`이 `catch (Exception)`으로 내부 오류까지 삼킴** → `false` 반환 → 인증 안 됨 → 뒷단에서 401 `LOGIN_REQUIRED`. 실제 원인(키 로딩 실패 등 500성 버그)이 "로그인 필요"로 둔갑.
+2. **필터 안 `loadUserByUsername` 예외** — 삭제된 사용자면 `UsernameNotFoundException`(=`AuthenticationException`)이라 401, DB 장애 등이면 500으로 새어 나감.
+
+**보강 ① `validateToken`의 catch를 좁힌다** — 진짜 인증 실패(만료·서명·형식)만 `false`로, 그 외는 전파:
+
+```java
+public boolean validateToken(String token) {
+  try {
+    Jwts.parser().verifyWith(key).build().parseSignedClaims(token);
+    return true;
+  } catch (JwtException | IllegalArgumentException e) {
+    log.debug("invalid jwt: {}", e.getMessage());   // 만료·위조·형식·빈 토큰만 인증 실패
+    return false;
+  }
+  // 그 외 예외는 삼키지 않고 전파 → 내부 오류로 드러남
+}
+```
+
+**보강 ② 필터에서 예외를 3분기** — 인증 실패는 통과(→401), 내부 오류는 `HandlerExceptionResolver`로 위임(→`GlobalExceptionHandler` 500):
+
+```java
+// @Qualifier("handlerExceptionResolver")로 스프링 MVC의 리졸버를 생성자 주입
+try {
+  String token = resolveToken(request);
+  if (token != null && tokenProvider.validateToken(token)) {
+    // ... SecurityContext에 Authentication 심기
+  }
+} catch (AuthenticationException e) {
+  // 유효 토큰인데 사용자 없음 등 — 컨텍스트 비우고 통과 → 뒷단 entryPoint가 401(정상)
+  SecurityContextHolder.clearContext();
+} catch (Exception e) {
+  // 예상치 못한 내부 오류 — 401로 둔갑시키지 않고 DispatcherServlet 예외 처리로 위임(→ 500)
+  SecurityContextHolder.clearContext();
+  handlerExceptionResolver.resolveException(request, response, null, e);
+  return;
+}
+filterChain.doFilter(request, response);
+```
+
+| 상황 | 보강 전 | 보강 후 |
+|---|---|---|
+| 토큰 없음/만료/위조 | 401 | 401 |
+| 삭제된 사용자의 유효 토큰 | 401 | 401 (인증 실패로 통과) |
+| **키 로딩 실패·DB 장애 등 내부 버그** | **401 둔갑** | **500 `INTERNAL_ERROR`** |
+
+> [!TIP]
+> FE는 보통 401을 "세션 만료 → 강제 로그아웃/재로그인"으로 처리한다. 서버 500 버그가 401로 둔갑하면 **멀쩡한 사용자를 로그아웃시키는 오동작**을 한다. 500은 500으로 나가야 FE가 "잠시 후 재시도" 같은 올바른 반응을 할 수 있다. "필터는 `GlobalExceptionHandler`의 사각지대 → 내부 오류는 `HandlerExceptionResolver`로 위임"을 **JWT 필터의 기본 패턴**으로 기억해 두면 좋다.
+
 ---
 
 ### Step 5. `AuthConst` + Resolver 내부 변경 — userId를 컨트롤러에 **주입**
