@@ -1,5 +1,6 @@
 package com.example.board.auth.jwt;
 
+import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
@@ -49,12 +50,14 @@ public class JwtTokenProvider {
         .getSubject();
   }
 
-  // 서명 위변조·만료를 검증한다. 어떤 이유로든 유효하지 않으면 false.
+  // 서명 위변조·만료·형식 오류만 "인증 실패(false)"로 취급한다.
+  // JwtException(만료·서명·형식), IllegalArgumentException(null/빈 토큰)만 잡고,
+  // 그 외 예외(키 로딩 실패 등 내부 오류)는 삼키지 않고 전파한다 — 401로 둔갑하지 않도록.
   public boolean validateToken(String token) {
     try {
       Jwts.parser().verifyWith(key).build().parseSignedClaims(token);
       return true;
-    } catch (Exception e) {
+    } catch (JwtException | IllegalArgumentException e) {
       log.debug("invalid jwt: {}", e.getMessage());
       return false;
     }
