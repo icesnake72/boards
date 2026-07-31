@@ -41,21 +41,28 @@ status: 완료
 
 ### 요청 흐름 한눈에
 
-```
-[로그인]
-  Client ──POST /auth/login {id, pw}──▶ Server
-                                         username/password 검증
-                                         JwtTokenProvider.createToken(userId)
-  Client ◀──200 {accessToken:"eyJ..."}── Server   (저장 안 함, 쿠키 없음)
+**로그인** — 토큰을 발급받는다(서버는 아무것도 저장하지 않는다):
 
-[보호 API 호출]
-  Client ──GET /profiles/me ───────────▶ Server
-          Authorization: Bearer eyJ...    JwtAuthenticationFilter
-                                            토큰 검증 → userId를 request에 심음
-                                          LoginUserIdArgumentResolver
-                                            request에서 userId 꺼내 @LoginUserId에 주입
-                                          Controller (수정 없음!)
-  Client ◀──200 {프로필}────────────────  Server
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+
+    C->>S: POST /auth/login (id, pw)
+    Note over S: username/password 검증<br/>JwtTokenProvider.createToken(userId)
+    S-->>C: 200 accessToken=eyJ... (저장 안 함, 쿠키 없음)
+```
+
+**보호 API 호출** — 매 요청에 토큰을 실어 보내면 필터가 신원을 심는다:
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+
+    C->>S: GET /profiles/me + 헤더 Bearer eyJ...
+    Note over S: JwtAuthenticationFilter — 토큰 검증 → userId를 request에 심음<br/>LoginUserIdArgumentResolver — @LoginUserId에 주입<br/>Controller (수정 없음!)
+    S-->>C: 200 프로필
 ```
 
 ---
@@ -436,31 +443,40 @@ public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Excepti
 
 ## 4. 전체 요청 흐름 — 시퀀스
 
-```
-[로그인]
-Client            AuthController        AuthService           JwtTokenProvider
-  │ POST /auth/login                        │                      │
-  │ {username, password}                    │                      │
-  ├─────────────▶│ login(request)           │                      │
-  │              ├─────────────────────────▶│ 비밀번호 검증         │
-  │              │                          │ createToken(userId)  │
-  │              │                          ├─────────────────────▶│ 서명된 토큰 생성
-  │              │                          │◀─────────────────────┤
-  │ 200 {accessToken, ...}                  │                      │
-  │◀─────────────┤  (저장 없음, 쿠키 없음)   │                      │
+**로그인** — `AuthController → AuthService → JwtTokenProvider`로 내려가 서명된 토큰을 만들어 돌려준다:
 
-[보호 API]
-Client       JwtAuthenticationFilter   LoginUserIdArgumentResolver   PostController
-  │ POST /boards/1/posts                    │                          │
-  │ Authorization: Bearer eyJ...            │                          │
-  ├──────────▶│ validateToken() OK          │                          │
-  │           │ request.setAttribute(       │                          │
-  │           │   LOGIN_USER_ID, userId)    │                          │
-  │           ├────────────────────────────▶│ getAttribute → userId    │
-  │           │                             ├─────────────────────────▶│ create(userId, ...)
-  │           │                             │   (null이면 401)          │
-  │ 201 Created                             │                          │
-  │◀───────────────────────────────────────────────────────────────────┤
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant AC as AuthController
+    participant AS as AuthService
+    participant TP as JwtTokenProvider
+
+    C->>AC: POST /auth/login (username, password)
+    AC->>AS: login(request)
+    Note over AS: 비밀번호 검증
+    AS->>TP: createToken(userId)
+    Note over TP: 서명된 토큰 생성
+    TP-->>AS: accessToken
+    AS-->>AC: TokenResponse
+    AC-->>C: 200 accessToken (저장 없음, 쿠키 없음)
+```
+
+**보호 API** — 필터가 토큰을 검증해 userId를 심고, Resolver가 그걸 꺼내 컨트롤러에 주입한다:
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant F as JwtAuthenticationFilter
+    participant R as LoginUserIdArgumentResolver
+    participant PC as PostController
+
+    C->>F: POST /boards/1/posts + 헤더 Bearer eyJ...
+    Note over F: validateToken() OK<br/>request.setAttribute(LOGIN_USER_ID, userId)
+    F->>R: (필터 통과) getAttribute → userId
+    Note over R: userId가 null이면 401
+    R->>PC: create(userId, ...)
+    PC-->>C: 201 Created
 ```
 
 ---
@@ -499,24 +515,33 @@ Client       JwtAuthenticationFilter   LoginUserIdArgumentResolver   PostControl
 
 ## 7. 핵심 요약 한 장
 
+**JWT 구현 순서**:
+
+| # | 클래스/작업 | 역할 |
+|---|-----------|------|
+| 0 | 의존성(jjwt) + 설정 | `jwt.secret` |
+| 1 | `JwtTokenProvider` | 토큰 생성/검증/파싱 도구 |
+| 2 | `TokenResponse` | 로그인 응답 그릇 |
+| 3 | `AuthService`/`Controller` | 로그인 → 토큰 발급 (세션 저장 제거) |
+| 4 | `JwtAuthenticationFilter` | 들어온 Bearer 토큰 검증 → userId를 심기 |
+| 5 | Resolver 내부 변경 | request의 userId를 `@LoginUserId`에 주입 |
+| 6 | `SecurityConfig` | 필터 등록 + STATELESS |
+| 7 | 테스트 | 발급/검증/401 |
+
+**두 경로**:
+
+```mermaid
+flowchart LR
+  subgraph ISSUE["발급 경로"]
+    L["login"] --> CT["createToken"] --> TR["TokenResponse"]
+  end
+  subgraph VERIFY["검증 경로"]
+    F["Filter (validate)"] --> RA["request attribute"] --> R["Resolver"] --> CTRL["컨트롤러"]
+  end
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│ JWT 구현 순서                                                          │
-│  0. 의존성(jjwt) + 설정(jwt.secret)                                    │
-│  1. JwtTokenProvider        토큰 생성/검증/파싱 도구                    │
-│  2. TokenResponse           로그인 응답 그릇                            │
-│  3. AuthService/Controller  로그인 → 토큰 발급 (세션 저장 제거)         │
-│  4. JwtAuthenticationFilter 들어온 Bearer 토큰 검증 → userId를 심기     │
-│  5. Resolver 내부 변경       request의 userId를 @LoginUserId에 주입      │
-│  6. SecurityConfig          필터 등록 + STATELESS                       │
-│  7. 테스트                  발급/검증/401                              │
-│                                                                       │
-│ 발급 경로:  login → createToken → TokenResponse                       │
-│ 검증 경로:  Filter(validate) → request attribute → Resolver → 컨트롤러 │
-│                                                                       │
-│ 안 바뀐 것:  Post/Board/Profile 컨트롤러 (추상화 효과)                 │
-└──────────────────────────────────────────────────────────────────────┘
-```
+
+> [!IMPORTANT]
+> **안 바뀐 것**: `Post`/`Board`/`Profile` 컨트롤러는 한 줄도 수정하지 않았다 — `@LoginUserId` 추상화 덕분에 세션→JWT 전환이 인증 계층 안에서 끝났다.
 
 ---
 
