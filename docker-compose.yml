@@ -1,71 +1,59 @@
-# 백엔드(Spring Boot) + MySQL 을 한 번에 띄운다.
+# 테스트 환경: 별도 MySQL 컨테이너를 띄우지 않고, 기존에 쓰던 mysql-8 컨테이너와
+# 전용 브리지 네트워크(board-db-net)로 묶어 백엔드만 실행한다.
+#
 #   docker compose up --build      # 빌드 후 기동
 #   docker compose up -d           # 백그라운드
 #   docker compose logs -f app     # 앱 로그
-#   docker compose down            # 정지(볼륨은 유지)
-#   docker compose down -v         # 정지 + 데이터 볼륨까지 삭제
+#   docker compose down            # 앱만 정지(mysql-8 · board-db-net 은 유지)
+#
+# 전제(최초 1회 세팅):
+#   docker network create board-db-net
+#   docker network connect board-db-net mysql-8
+# 앱은 같은 네트워크에서 컨테이너명 "mysql-8" 로 DB에 접속한다(root/1234, DB: board).
 #
 # 비밀값(KAKAO_*/GOOGLE_*)은 .env 에서 주입된다. .env 가 없으면 카카오 프로퍼티
-# fail-fast 검증(@PostConstruct)에서 기동이 실패하므로, 먼저 `cp .env.example .env` 후
-# 값을 채운다(로그인을 실제로 쓰지 않아도 카카오 키 자리엔 임의의 non-empty 값이 필요).
+# fail-fast 검증에서 기동이 실패하므로, 먼저 `cp .env.example .env` 후 값을 채운다.
 name: board
 
 services:
-  mysql:
-    image: mysql:8.4
-    container_name: board-mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-1234}
-      MYSQL_DATABASE: ${DB_NAME:-board}
-      TZ: Asia/Seoul
-    ports:
-      - "${DB_PORT:-3306}:3306"   # 호스트 툴에서 직접 접속하고 싶을 때만 필요
-    volumes:
-      - mysql-data:/var/lib/mysql
-    healthcheck:
-      # 앱이 "DB가 실제로 응답할 때" 기동하도록 — depends_on: service_healthy 와 짝을 이룬다
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${DB_PASSWORD:-1234}"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    restart: unless-stopped
-
   app:
     build:
       context: .
       dockerfile: Dockerfile
     image: board-app:latest
     container_name: board-app
-    depends_on:
-      mysql:
-        condition: service_healthy   # MySQL 헬스체크 통과 후에야 앱 시작
     env_file:
       - .env                          # KAKAO_*/GOOGLE_* 주입 (기동 필수 — 위 주석 참고)
     environment:
-      # datasource placeholder(${DB_HOST} 등)를 컨테이너 네트워크에 맞게 채운다.
-      # 앱은 같은 compose 네트워크의 "mysql" 서비스명으로 DB에 접속한다.
-      DB_HOST: mysql
+      # 기존 mysql-8 컨테이너를 컨테이너명으로 접속(같은 board-db-net 안에서 DNS 해석).
+      DB_HOST: mysql-8
       DB_PORT: "3306"
       DB_NAME: ${DB_NAME:-board}
       DB_USERNAME: ${DB_USERNAME:-root}
       DB_PASSWORD: ${DB_PASSWORD:-1234}
       APP_UPLOAD_DIR: /app/uploads
       TZ: Asia/Seoul
-      # 운영(HTTPS) 전환 시 아래 두 값을 오버라이드한다.
+      # 운영(HTTPS) 전환 시 아래를 오버라이드한다.
       # JWT_SECRET: <운영 전용 Base64 시크릿으로 교체>
       # APP_REFRESH_COOKIE_SECURE: "true"
     ports:
       - "8090:8090"
     volumes:
-      - uploads:/app/uploads          # 업로드 이미지 영속화(컨테이너 재생성에도 보존)
+      - uploads:/app/uploads          # 업로드 이미지 영속화
+    networks:
+      - board-db-net
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8090/api/v1/boards"]
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 40s               # 최초 부팅(JVM+DDL) 여유
+      start_period: 40s
     restart: unless-stopped
 
+networks:
+  # 기존 mysql-8 이 물려 있는 전용 브리지 네트워크(외부 생성). compose가 지우지 않는다.
+  board-db-net:
+    external: true
+
 volumes:
-  mysql-data:   # MySQL 데이터
-  uploads:      # 업로드 이미지
+  uploads:   # 업로드 이미지
