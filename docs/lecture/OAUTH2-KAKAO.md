@@ -159,12 +159,12 @@ public class KakaoOAuthProperties {
 public KakaoTokenResponse requestToken(String code) {
   MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
   form.add("grant_type", "authorization_code");
-  form.add("client_id", properties.appkey());
-  form.add("client_secret", properties.secret());
-  form.add("redirect_uri", properties.callback());  // 인가 요청과 같은 값이어야 함
+  form.add("client_id", properties.getAppkey());
+  form.add("client_secret", properties.getSecret());
+  form.add("redirect_uri", properties.getCallback());  // 인가 요청과 같은 값이어야 함
   form.add("code", code);
   return restClient.post()
-      .uri(properties.tokenUri())
+      .uri(properties.getTokenUri())
       .contentType(MediaType.APPLICATION_FORM_URLENCODED)
       .body(form)
       .retrieve()
@@ -394,7 +394,7 @@ curl만으로는 ④(카카오 로그인 화면)를 지나갈 수 없다 — **�
 | `AuthProvider` (신규) | LOCAL / KAKAO 가입 경로 enum |
 | `User` | `provider`, `providerId` 추가 + 복합 UNIQUE, 소셜용 생성자 |
 | `UserRepository` | `findByProviderAndProviderId` |
-| `KakaoOAuthProperties` (신규) | `app.oauth.kakao.*` record 바인딩 |
+| `KakaoOAuthProperties` (신규) | `app.oauth.kakao.*`를 타입세이프 불변 클래스로 바인딩(`@ConfigurationProperties` + `@PostConstruct validate()`) |
 | `KakaoTokenResponse` / `KakaoUserResponse` (신규) | 카카오 응답 DTO (snake_case 매핑, null-safe) |
 | `KakaoOAuthClient` (신규) | 인가 URL 생성, 토큰 교환, 사용자 조회 (RestClient) |
 | `KakaoOAuthService` (신규) | find-or-create + 우리 토큰 발급 |

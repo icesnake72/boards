@@ -159,12 +159,15 @@ public class CookieOAuth2AuthorizationRequestRepository
 @Transactional
 public OAuth2User loadUser(OAuth2UserRequest userRequest) {
   OAuth2User oauth2User = super.loadUser(userRequest);  // 카카오 /v2/user/me — fetchUser의 대체
-  upsertUser(oauth2User.getAttributes());               // find-or-create — KakaoOAuthService에서 이사
+  // 어느 registration의 로그인인지("kakao"/"google")는 요청에 실려 온다
+  String registrationId = userRequest.getClientRegistration().getRegistrationId();
+  upsertUser(registrationId, oauth2User.getAttributes());  // find-or-create — KakaoOAuthService에서 이사
   return oauth2User;
 }
 ```
 
 - `super.loadUser()`가 단계 7의 `fetchUser`를 정확히 대신한다 — 우리가 추가하는 것은 그 결과를 우리 `users` 테이블에 연결하는 일뿐.
+- `registrationId`(`"kakao"`/`"google"`)를 함께 넘기는 이유: `upsertUser`가 이 값으로 `AuthProvider`를 정하고 제공자별 응답 구조(중첩 vs 평면)를 분기한다. 단계 8 시점엔 카카오만 붙였지만, 단계 9에서 구글이 같은 진입점을 재사용하도록 처음부터 인자로 받게 했다.
 - find-or-create **정책은 단계 7과 완전히 동일**(kakao_{회원번호} username, 랜덤 password 해시, 이메일 폴백, 닉네임 충돌 suffix). 로직이 이사만 왔다 — 실제로 E2E에서 **단계 7 때 가입한 사용자를 표준 경로가 그대로 재사용**함을 확인했다.
 - attributes는 단계 7 DTO가 받던 것과 같은 중첩 Map — 같은 "한 단계씩 내려가기" 방식으로 email/nickname을 꺼낸다.
 
@@ -271,9 +274,9 @@ public SecurityFilterChain securityFilterChain(
 
 ## 7. 테스트와 검증
 
-- `CustomOAuth2UserServiceTest` (4) — upsert 정책이 단계 7과 동일함을 같은 케이스로 검증
-- `CookieOAuth2AuthorizationRequestRepositoryTest` (4) — save→load 왕복, remove 후 만료, 쿠키 부재, **조작된 쿠키 → null**
-- 전체 70개 통과 (수동 경로 테스트 포함 — 병행이므로 둘 다 green)
+- `CustomOAuth2UserServiceTest` (7) — upsert 정책이 단계 7과 동일함을 같은 케이스로 검증 (단계 8은 카카오 4케이스, 단계 9에서 구글 3케이스가 같은 파일에 추가돼 현재 7)
+- `CookieOAuth2AuthorizationRequestRepositoryTest` (6) — save→load 왕복, remove 후 만료, 쿠키 부재, **조작된 쿠키 → null** (단계 8은 4케이스, 단계 9 nonce 왕복 2케이스가 추가돼 현재 6)
+- 수동 경로 테스트까지 병행 유지 — 두 경로 모두 green. (전체 테스트 총계는 이후 단계 10~13이 쌓이며 계속 늘어난다; 스냅샷 숫자 대신 `./gradlew test`로 확인)
 - **실 브라우저 E2E**: 표준 경로 로그인 → 콜백 `/login/oauth2/code/kakao` → JWT 응답 → DB 기존 사용자 재사용 → httpOnly reissue 200. 수동 경로도 병행 동작 확인.
 
 ---

@@ -11,7 +11,7 @@ requires: ["[[TESTING-GUIDE]]"]
 - **대상**: 지금까지 코드는 짜 봤지만 "테스트를 정식으로 학습한 적이 없는" 수강생. 이 프로젝트의 도메인(회원/게시글/OAuth)은 이미 익숙하다는 전제
 - **선수 지식**: Java 문법(람다·제네릭), 이 저장소의 대략적 구조(`post/`, `auth/`, `global/`), 실행 방법은 [TESTING-GUIDE.md](TESTING-GUIDE.md)에서 이미 익혔다는 전제
 - **관련 코드**: `src/test/java/` 전체, `build.gradle`(테스트 의존성), `src/test/resources/application.yaml`(H2 테스트 프로파일)
-- **검증 상태**: 이 문서에 인용된 모든 스니펫은 저장소의 실 테스트 코드와 문자열 단위로 일치 (2026-07-25 기준, 총 테스트 파일 15개)
+- **검증 상태**: 이 문서에 인용된 모든 스니펫은 저장소의 실 테스트 코드와 문자열 단위로 일치 (2026-08-02 기준, 총 테스트 파일 20개 = `*Test.java` 19개 + `BoardApplicationTests` 1개)
 - **이 문서의 위치**: `TESTING-GUIDE.md`는 "테스트를 어떻게 **실행**하나"를 다루고, 이 문서는 "테스트를 어떻게 **작성**하나"를 다룬다 — 짝을 이루는 문서
 
 ---
@@ -948,16 +948,19 @@ flowchart TD
 
 ### 10-2. 이 프로젝트가 실제로 어떻게 나뉘어 있나
 
-15개 테스트 파일을 유형별로 분류하면 우리 팀이 어디에 무게를 두었는지 보인다:
+20개 테스트 파일을 유형별로 분류하면 우리 팀이 어디에 무게를 두었는지 보인다:
 
 | 유형 | 개수 | 파일 |
 |------|------|------|
 | 순수 단위 | 3 | `JwtTokenProviderTest`, `KakaoUserResponseTest`, `CookieOAuth2AuthorizationRequestRepositoryTest` |
-| Mockito 단위 | 여러 (예: `CustomUserDetailsServiceTest`, `AuthServiceTest`, `KakaoOAuthServiceTest`) | Service 로직 격리 검증 |
-| `@SpringBootTest` 통합 | 다수 (`PostServiceTest`, `ProfileServiceTest`, `CustomOAuth2UserServiceTest`, `CustomOidcUserServiceTest` 등) | JPA·트랜잭션·upsert 정책 |
+| Mockito 단위 | 여러 (예: `CustomUserDetailsServiceTest`, `AuthServiceTest`, `KakaoOAuthServiceTest`, `JwtAuthenticationFilterTest`) | Service·필터 로직 격리 검증 |
+| `@SpringBootTest` 통합 | 다수 (`PostServiceTest`, `ProfileServiceTest`, `CommentServiceTest`, `ReactionServiceTest`, `NotificationServiceTest`, `CustomOAuth2UserServiceTest`, `CustomOidcUserServiceTest` 등) | JPA·트랜잭션·도메인 로직(댓글·반응·알림)·upsert 정책 |
+| `@SpringBootTest` (실 커밋) | 1 (`NotificationEventListenerTest`) | `@Transactional` 없이 실제 커밋으로 `AFTER_COMMIT` 리스너 검증, `@AfterEach` 수동 정리 |
 | MockMvc | 2 (`SecurityIntegrationTest`, `GlobalExceptionHandlerTest`) | 보안·예외 응답 스키마 계약 |
 | 외부 자원 | 1 (`FileStorageServiceTest`) | `@TempDir` 파일 격리 |
 | 웹 계층 컨트롤러 | (`KakaoOAuthControllerTest`) | 컨트롤러 파라미터/응답 |
+
+> 위 표는 대표 파일 위주의 분류라 개수가 "여러/다수"로 뭉뚱그려져 있다. 실제 파일은 `*Test.java` 19개에 컨텍스트 로딩 스모크 테스트 `BoardApplicationTests` 1개를 더해 **총 20개**다.
 
 **해석**: 도메인 로직(회원가입, 게시글 CRUD, OAuth upsert)에는 `@SpringBootTest` 통합이 가장 많다 — JPA와 실제로 어울려야 의미 있는 것들이기 때문. 외부 자원·순수 값 객체·유틸에만 순수 단위가 붙었다. MockMvc는 "이것만은 HTTP 스타일로 못 박고 싶다"는 두 지점(보안 필터, 예외 스키마)에 집중.
 

@@ -40,7 +40,7 @@ status: 완료
 | 층위 | 파일 (예정) | 역할 |
 |------|-------------|------|
 | 발행 | `comment/CommentService` | `create`가 저장 직후 `ApplicationEventPublisher.publishEvent(new CommentCreatedEvent(...))`. 알림 도메인을 몰라도 됨 |
-| 이벤트 | `notification/CommentCreatedEvent` (record) | 최소 정보(commentId/postId/parentId/authorId/postAuthorId/parentAuthorId)만 담는다. 엔티티 참조 대신 id — 컨텍스트 이탈 후에도 안전 |
+| 이벤트 | `notification/CommentCreatedEvent` (record) | 최소 정보(commentId/postId/parentCommentId/actorId) 4필드만 담는다. 엔티티 참조 대신 id — 컨텍스트 이탈 후에도 안전. recipient(작성자)는 리스너가 재조회 |
 | 수신 | `notification/NotificationEventListener` | `@TransactionalEventListener(phase=AFTER_COMMIT)` + `@Transactional(propagation=REQUIRES_NEW)` — 이 조합이 이번 단계의 핵심 |
 | 저장 | `notification/Notification` + `NotificationRepository` | 메타데이터(type/actor/postId/commentId/read)만 저장, 문구는 조회 시 렌더 |
 | 조회·읽음 | `notification/NotificationController` + `NotificationService` | 4개 엔드포인트, 본인 것만(recipient=로그인 사용자로 필터) |
@@ -108,11 +108,11 @@ sequenceDiagram
 |------|-------------|-----------------|--------------|
 | 1 | `ErrorCode.java` | `NOTIFICATION_NOT_FOUND(404)` 추가 | 서비스 검증에서 던질 예외 |
 | 2 | `notification/NotificationType.java` (신규) | enum: `COMMENT_ON_POST`, `REPLY_ON_COMMENT` | 엔티티/응답 DTO가 함께 참조 |
-| 3 | `notification/CommentCreatedEvent.java` (신규, record) | 이벤트 payload — commentId/postId/parentId/actorId/postAuthorId/parentAuthorId | 발행자·수신자 양쪽이 의존하는 계약 |
+| 3 | `notification/CommentCreatedEvent.java` (신규, record) | 이벤트 payload — commentId/postId/parentCommentId/actorId (4필드) | 발행자·수신자 양쪽이 의존하는 계약 |
 | 4 | `notification/Notification.java` (신규) | 엔티티 — recipient/actor/type/postId/commentId/read + `markAsRead`/`isOwnedBy` | 도메인 최하위 부품 |
-| 5 | `notification/NotificationRepository.java` (신규) | `findByRecipientId`(페이징, 최신순), `countByRecipientIdAndReadFalse`, `updateAllReadByRecipientId` | 서비스가 의존 |
+| 5 | `notification/NotificationRepository.java` (신규) | `findByRecipientId`(페이징, 최신순), `countByRecipientIdAndReadIsFalse`, `markAllAsRead`(벌크 UPDATE) | 서비스가 의존 |
 | 6 | `notification/dto/NotificationResponse.java` (신규) | 메타→문구 렌더(`from`에서 type별 조립) | 서비스 반환 타입 |
-| 7 | `notification/NotificationService.java` (신규) | `create`(리스너에서 호출), `getMy`, `unreadCount`, `markAsRead`, `markAllAsRead` — 모두 recipient 필터 | 4·5·6 조립 |
+| 7 | `notification/NotificationService.java` (신규) | `create`(리스너에서 호출), `getNotifications`, `unreadCount`, `markAsRead`, `markAllAsRead` — 모두 recipient 필터 | 4·5·6 조립 |
 | 8 | `notification/NotificationEventListener.java` (신규) | `@TransactionalEventListener(AFTER_COMMIT)` + `@Transactional(REQUIRES_NEW)` — 대상 결정 후 `NotificationService.create` 호출 | 7이 있어야 호출 대상 성립 |
 | 9 | `comment/CommentService.java` (수정) | 필드에 `ApplicationEventPublisher` 추가 + `create` 끝에 `publishEvent(new CommentCreatedEvent(...))` | 발행 지점 — 3의 record 필요 |
 | 10 | `notification/NotificationController.java` (신규) | 4 엔드포인트 (`@AuthenticationPrincipal`로 본인 id 주입) | 7을 호출하는 진입점 |
@@ -196,17 +196,16 @@ public class CommentService {
     Comment saved = commentRepository.save(comment);
 
     // 알림 도메인의 존재를 몰라도 됨 — 이벤트만 던진다.
-    // 대상 결정(자기 자신 스킵 등)은 리스너의 책임.
+    // 대상 결정(자기 자신 스킵 등)과 recipient 재조회는 리스너의 책임.
     eventPublisher.publishEvent(new CommentCreatedEvent(
         saved.getId(),
         postId,
         request.parentId(),                    // null이면 최상위 댓글
-        loginUserId,                           // actor
-        post.getAuthor().getId(),              // 게시글 작성자
-        request.parentId() == null ? null : saved.getParent().getAuthor().getId()
+        loginUserId                            // actor
     ));
 
-    return CommentResponse.from(saved);
+    // 방금 만든 댓글은 반응이 없으므로 빈 맵.
+    return CommentResponse.from(saved, Map.of());
   }
 }
 ```
@@ -214,16 +213,16 @@ public class CommentService {
 이벤트 record는 아무 인터페이스도 상속하지 않는다(Spring 4.2+):
 
 ```java
-// notification/CommentCreatedEvent.java (제안)
-// 엔티티 참조 대신 id만 담는다 — 리스너는 다른 트랜잭션에서 실행되므로
-// 엔티티 프록시를 넘기면 detach된 상태가 될 수 있다. id는 안전하다.
+// notification/CommentCreatedEvent.java
+// 댓글 작성 "사실"만 담는다. 엔티티 참조 대신 id만 담는 이유 — 리스너는 AFTER_COMMIT
+// (원 트랜잭션 종료 후 새 트랜잭션)에서 실행되므로 detach된 프록시를 피한다.
+// recipient(작성자) 결정은 발행자가 아니라 리스너가 postId/parentCommentId로 재조회한다
+// (발행자는 알림 정책을 모른다). 그래서 이벤트에는 postAuthorId/parentAuthorId를 담지 않는다.
 public record CommentCreatedEvent(
     Long commentId,
     Long postId,
     Long parentCommentId,     // null이면 최상위 댓글(→ COMMENT_ON_POST)
-    Long actorId,             // 댓글을 작성한 사용자 = 알림의 actor
-    Long postAuthorId,        // 게시글 작성자 (COMMENT_ON_POST의 후보 recipient)
-    Long parentAuthorId       // 원댓글 작성자 (REPLY_ON_COMMENT의 후보 recipient), 최상위면 null
+    Long actorId              // 댓글을 작성한 사용자 = 알림의 actor
 ) {}
 ```
 
@@ -259,9 +258,9 @@ public class NotificationEventListener {
 
   @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
   public void onCommentCreated(CommentCreatedEvent event) {
-    // 대상 결정...
+    // 대상 결정(recipient는 postId/parentCommentId로 재조회)...
     notificationService.create(recipientId, event.actorId(), type,
-        event.postId(), event.parentCommentId());
+        event.postId(), event.commentId());
     // 저장이 커밋되지 않고 사라질 수 있다!
   }
 }
@@ -276,34 +275,41 @@ public class NotificationEventListener {
 ### 올바른 구현 — REQUIRES_NEW로 완전히 새 트랜잭션
 
 ```java
-// 올바른 방식 (제안): AFTER_COMMIT 리스너에 REQUIRES_NEW로 새 트랜잭션을 명시
+// 올바른 방식: AFTER_COMMIT 리스너에 REQUIRES_NEW로 새 트랜잭션을 명시
 @Component
 @RequiredArgsConstructor
 @Slf4j
 public class NotificationEventListener {
 
   private final NotificationService notificationService;
+  private final PostRepository postRepository;
+  private final CommentRepository commentRepository;
 
   @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void onCommentCreated(CommentCreatedEvent event) {
-    // 자기 자신에게 보내는 알림은 스킵 (자기 글에 자기가 댓글, 자기 댓글에 자기가 대댓글)
+    // recipient(작성자)는 이벤트에 없다 — 정책상 필요 시점에 author를 리포지토리로 재조회한다.
+    // (발행자는 알림 정책을 모르므로 postAuthorId/parentAuthorId를 이벤트에 담지 않는다.)
     Long recipientId;
     NotificationType type;
     if (event.parentCommentId() == null) {
-      recipientId = event.postAuthorId();
+      recipientId = postRepository.findAuthorIdById(event.postId()).orElse(null);
       type = NotificationType.COMMENT_ON_POST;
     } else {
-      recipientId = event.parentAuthorId();
+      recipientId = commentRepository.findAuthorIdById(event.parentCommentId()).orElse(null);
       type = NotificationType.REPLY_ON_COMMENT;
     }
+
+    // 자기 글에 자기가 댓글 / 자기 댓글에 자기가 대댓글이면 스킵.
     if (recipientId == null || recipientId.equals(event.actorId())) {
       return;
     }
 
     try {
+      // commentId는 "이 알림을 유발한 새 댓글" — 클릭 시 그 댓글로 딥링크하도록 저장한다
+      // (parentCommentId가 아니라 방금 달린 댓글의 id).
       notificationService.create(recipientId, event.actorId(), type,
-          event.postId(), event.parentCommentId());
+          event.postId(), event.commentId());
     } catch (RuntimeException e) {
       // 알림 저장 실패가 댓글 응답을 깨서는 안 된다(이미 응답 전송 완료 상태).
       // 로그만 남기고 조용히 실패를 흡수 — 알림 유실은 재시도 배치의 몫으로.
@@ -369,7 +375,7 @@ notification.setMessage("uploader님이 회원님의 게시글에 댓글을 남�
 // 인앱 알림 한 건. 문구가 아니라 메타데이터를 저장한다 — actor.username이 바뀌면 자동 반영되도록.
 @Entity
 @Table(name = "notifications", indexes = {
-    @Index(name = "idx_notifications_recipient_created", columnList = "recipient_id, createdAt DESC")
+    @Index(name = "idx_notifications_recipient_created", columnList = "recipient_id, created_at")
 })
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -398,8 +404,10 @@ public class Notification extends BaseTimeEntity {
   @Column(name = "post_id", nullable = false)
   private Long postId;
 
+  // 알림을 유발한 "새 댓글"의 id — COMMENT_ON_POST/REPLY_ON_COMMENT 모두 리스너가 항상 채운다
+  // (딥링크용). 컬럼은 nullable이지만 정상 경로에선 null이 아니다.
   @Column(name = "comment_id")
-  private Long commentId;  // REPLY_ON_COMMENT에서 사용, COMMENT_ON_POST에서는 null 허용
+  private Long commentId;
 
   @Column(name = "is_read", nullable = false)
   private boolean read;
@@ -516,8 +524,8 @@ public record NotificationResponse(
 ```mermaid
 flowchart TD
   E["CommentCreatedEvent 수신"] --> P{"parentCommentId == null?"}
-  P -->|"Yes (최상위 댓글)"| R1["recipient = postAuthorId, type = COMMENT_ON_POST"]
-  P -->|"No (대댓글)"| R2["recipient = parentAuthorId, type = REPLY_ON_COMMENT"]
+  P -->|"Yes (최상위 댓글)"| R1["recipient = postRepository.findAuthorIdById(postId), type = COMMENT_ON_POST"]
+  P -->|"No (대댓글)"| R2["recipient = commentRepository.findAuthorIdById(parentCommentId), type = REPLY_ON_COMMENT"]
   R1 --> S{"recipient == actor?"}
   R2 --> S
   S -->|"Yes"| SKIP["스킵 (알림 안 만듦)"]
@@ -526,8 +534,9 @@ flowchart TD
 
 리스너 안의 대상 결정은 §2의 코드에 이미 포함되어 있다. 핵심은:
 
+- **recipient(작성자)를 리스너가 재조회** — 이벤트는 `postAuthorId`/`parentAuthorId`를 담지 않는다. 발행자(`CommentService`)는 "누가 recipient인가"라는 알림 정책을 몰라도 되기 때문이다. 대신 리스너가 필요 시점에 `postRepository.findAuthorIdById(postId)`(최상위 댓글) 또는 `commentRepository.findAuthorIdById(parentCommentId)`(대댓글)로 author id만 가볍게 재조회한다(엔티티 로딩 없이). 이 재조회는 리스너의 REQUIRES_NEW 트랜잭션 안에서 일어나므로 안전하다.
 - **자기 자신 스킵을 리스너가 담당** — `CommentService`는 이 규칙을 몰라도 됨. 정책이 바뀌면(예: 자기 알림도 보내기로) 리스너 한 줄만 바꾸면 된다.
-- **`recipientId == null` 방어** — 대댓글 이벤트에서 `parentAuthorId`가 null이면(이벤트가 잘못 발행되었을 때) 스킵. 이 프로젝트의 발행 코드는 `saved.getParent().getAuthor().getId()`로 채워지므로 정상 경로에선 null이 될 수 없지만, 방어적으로 남긴다.
+- **`recipientId == null` 방어** — 재조회 시점에 게시글/원댓글이 이미 사라졌거나(경합) id가 잘못됐으면 `orElse(null)`로 null이 되어 스킵한다. 정상 경로에선 방금 커밋된 댓글의 대상이 존재하므로 null이 되지 않지만, 방어적으로 남긴다.
 
 **NotificationService.create — 저장 로직만 담당**:
 
@@ -575,11 +584,11 @@ public class NotificationController {
 
   // 본인 알림만. recipient 필터는 서비스가 담당(남의 것은 조회조차 되지 않음)
   @GetMapping
-  public Page<NotificationResponse> getMy(
+  public Page<NotificationResponse> list(
       @AuthenticationPrincipal CustomUserDetails userDetails,
       @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC)
       Pageable pageable) {
-    return notificationService.getMy(userDetails.getId(), pageable);
+    return notificationService.getNotifications(userDetails.getId(), pageable);
   }
 
   @GetMapping("/unread-count")
@@ -611,7 +620,7 @@ public class NotificationController {
 ```java
 // notification/NotificationService.java (제안, 조회 부분)
 @Transactional(readOnly = true)
-public Page<NotificationResponse> getMy(Long recipientId, Pageable pageable) {
+public Page<NotificationResponse> getNotifications(Long recipientId, Pageable pageable) {
   // WHERE recipient_id = :recipientId 로 강제 — 남의 알림은 조회 결과에 애초에 안 실린다
   return notificationRepository.findByRecipientId(recipientId, pageable)
       .map(NotificationResponse::from);
@@ -619,7 +628,7 @@ public Page<NotificationResponse> getMy(Long recipientId, Pageable pageable) {
 
 @Transactional(readOnly = true)
 public long unreadCount(Long recipientId) {
-  return notificationRepository.countByRecipientIdAndReadFalse(recipientId);
+  return notificationRepository.countByRecipientIdAndReadIsFalse(recipientId);
 }
 
 // 개별 읽음 — 소유 검증 필수. 남의 알림 id를 알아도 여기서 걸린다.
@@ -637,7 +646,7 @@ public void markAsRead(Long id, Long recipientId) {
 // 전체 읽음 — 자기 것만 UPDATE, N+1 없이 벌크 쿼리
 @Transactional
 public void markAllAsRead(Long recipientId) {
-  notificationRepository.updateAllReadByRecipientId(recipientId);
+  notificationRepository.markAllAsRead(recipientId);
 }
 ```
 
@@ -651,13 +660,13 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
   @EntityGraph(attributePaths = {"actor"})
   Page<Notification> findByRecipientId(Long recipientId, Pageable pageable);
 
-  long countByRecipientIdAndReadFalse(Long recipientId);
+  long countByRecipientIdAndReadIsFalse(Long recipientId);
 
   // 벌크 UPDATE — 개별 로드 없이 한 쿼리로 처리
   @Modifying(clearAutomatically = true)
   @Query("update Notification n set n.read = true "
       + "where n.recipient.id = :recipientId and n.read = false")
-  int updateAllReadByRecipientId(@Param("recipientId") Long recipientId);
+  int markAllAsRead(@Param("recipientId") Long recipientId);
 }
 ```
 
@@ -680,8 +689,8 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
 | `notification/Notification` | 알림 엔티티 — recipient/actor/type/postId/commentId/read + `markAsRead`/`isOwnedBy` |
 | `notification/NotificationType` | enum: `COMMENT_ON_POST`, `REPLY_ON_COMMENT` |
 | `notification/CommentCreatedEvent` | 이벤트 record — 최소 정보(id 위주)만 담아 컨텍스트 이탈 후에도 안전 |
-| `notification/NotificationRepository` | `findByRecipientId`(+ `@EntityGraph(actor)`), `countByRecipientIdAndReadFalse`, `updateAllReadByRecipientId` 벌크 UPDATE |
-| `notification/NotificationService` | `create` (리스너에서 호출), `getMy`, `unreadCount`, `markAsRead` (소유 검증), `markAllAsRead` |
+| `notification/NotificationRepository` | `findByRecipientId`(+ `@EntityGraph(actor)`), `countByRecipientIdAndReadIsFalse`, `markAllAsRead` 벌크 UPDATE |
+| `notification/NotificationService` | `create` (리스너에서 호출), `getNotifications`, `unreadCount`, `markAsRead` (소유 검증), `markAllAsRead` |
 | `notification/NotificationEventListener` | `@TransactionalEventListener(AFTER_COMMIT)` + `@Transactional(REQUIRES_NEW)` — 대상 결정 + 자기 자신 스킵 + 저장 위임 |
 | `notification/NotificationController` | 4 엔드포인트 (`GET /`, `GET /unread-count`, `PATCH /{id}/read`, `PATCH /read-all`) |
 | `notification/dto/NotificationResponse` | 메타 → 문구 렌더 (type별 switch) |

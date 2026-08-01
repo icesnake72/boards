@@ -86,9 +86,13 @@ sequenceDiagram
     end
     S->>R: ⑦ save(comment) — cascade 없이 개별 저장
     R-->>S: 저장된 Comment
-    S-->>C: ⑧ CommentResponse.from(saved) — 트랜잭션 내 DTO 변환
+    S->>S: ⑧ CommentCreatedEvent 발행 (알림 처리는 단계 12 소관)
+    S-->>C: ⑨ CommentResponse.from(saved, Map.of()) — 트랜잭션 내 DTO 변환
     C-->>B: 201 Created + JSON
 ```
+
+> [!NOTE]
+> ⑧·⑨는 단계 11 이후 확장된 부분이다. **알림 이벤트(⑧)**는 단계 12에서 도입됐다 — 댓글 저장 후 `CommentCreatedEvent`를 발행하기만 하고, 대상 결정/자기 자신 스킵은 리스너가 맡는다(상세는 [[NOTIFICATION]] 참조). **반응 파라미터(⑨의 `from` 2번째 인자)**는 단계 13([[REACTION]])에서 추가됐다(작성 직후엔 반응이 없어 `Map.of()`). 단계 11의 원형은 "save → DTO 변환 → 201"이며, 아래 스니펫은 최종 코드 기준이다.
 
 **핵심 한 줄**: **엔티티는 구조만, 정책은 서비스가** — 자기참조 컬럼(`parent_id`)은 임의 깊이의 트리를 구조적으로 허용하지만, 이 프로젝트의 1단계 깊이 규칙은 `CommentService.validateReplyTarget`이 강제한다.
 
@@ -212,7 +216,13 @@ public CommentResponse create(Long postId, Long loginUserId, CommentCreateReques
   }
 
   Comment saved = commentRepository.save(comment);
-  return CommentResponse.from(saved);
+
+  // 단계 12: 댓글 저장 후 CommentCreatedEvent를 발행한다(상세는 [[NOTIFICATION]] 참조).
+  eventPublisher.publishEvent(new CommentCreatedEvent(
+      saved.getId(), postId, request.parentId(), loginUserId));
+
+  // 단계 13: 방금 만든 댓글은 반응이 없으므로 빈 맵을 넘긴다([[REACTION]]).
+  return CommentResponse.from(saved, Map.of());
 }
 
 // 1단계 깊이 불변식과 삭제/소속 검증을 한곳에 모은다. 순서: 소속 → 삭제 → 깊이.
@@ -229,6 +239,9 @@ private void validateReplyTarget(Comment parent, Long postId) {
   }
 }
 ```
+
+> [!NOTE]
+> 이 스니펫은 최종 코드 기준이라 단계 11 범위 밖의 두 줄이 섞여 있다. **이벤트 발행**(`eventPublisher.publishEvent(...)`)은 단계 12에서, **`from`의 2번째 인자**(반응 맵)는 단계 13에서 붙었다. 단계 11의 핵심은 그 사이의 검증 흐름(`validateReplyTarget`)이며, 이벤트/반응은 이후 단계에서 "저장 후" 지점에 얹힌 확장이다. `CommentService`는 이를 위해 `ApplicationEventPublisher`와 `ReactionService`를 주입받는다.
 
 **검증 순서가 소속 → 삭제 → 깊이인 이유**:
 
@@ -289,17 +302,23 @@ public void delete(Long id) {
 // soft delete된 댓글의 실제 내용은 노출하지 않도록 마스킹한다(트리 유지 목적상 행은 남기되 내용만 감춤).
 private static final String DELETED_CONTENT = "삭제된 댓글입니다";
 
-public static CommentResponse from(Comment comment) {
+public static CommentResponse from(Comment comment, Map<Long, CommentReactionSummary> reactions) {
   // ...
   return new CommentResponse(
       comment.getId(),
       comment.getAuthor().getUsername(),
       comment.isDeleted() ? DELETED_CONTENT : comment.getContent(),
       comment.isDeleted(),
+      summary.likeCount(),      // 단계 13에서 추가된 반응 필드
+      summary.dislikeCount(),   // 단계 13
+      summary.myReaction(),     // 단계 13
       comment.getCreatedAt(),
       children);
 }
 ```
+
+> [!NOTE]
+> 마스킹은 단계 11의 주제지만, 위 `from`의 **시그니처(2번째 인자 `reactions`)와 `likeCount`/`dislikeCount`/`myReaction` 3개 필드는 단계 13([[REACTION]])에서 추가**됐다. 단계 11의 응답 레코드는 `(id, authorUsername, content, deleted, createdAt, children)` 6필드였고, 단계 13에서 반응 3필드가 그 사이에 끼어 총 9필드가 됐다. 마스킹 로직(`isDeleted() ? DELETED_CONTENT : ...`) 자체는 단계 11 그대로다.
 
 **두 가지 설계 결정**:
 
@@ -310,15 +329,20 @@ public static CommentResponse from(Comment comment) {
 
 ```java
 @Transactional
-public CommentResponse update(Long id, CommentUpdateRequest request) {
+public CommentResponse update(Long id, Long viewerId, CommentUpdateRequest request) {
   Comment comment = findComment(id);
   if (comment.isDeleted()) {
     throw new BusinessException(ErrorCode.CANNOT_EDIT_DELETED);
   }
   comment.update(request.content());
-  return CommentResponse.from(comment);
+  // 단계 13: 수정은 반응을 바꾸지 않지만 응답 스키마가 반응을 노출하므로 현재 값을 조회해 채운다.
+  var reactions = reactionService.getCommentReactions(List.of(comment.getId()), viewerId);
+  return CommentResponse.from(comment, reactions);
 }
 ```
+
+> [!NOTE]
+> 단계 11의 `update`는 `update(Long id, CommentUpdateRequest request)` — 삭제 상태 검증 후 내용만 바꿨다. `viewerId` 파라미터와 마지막 두 줄(반응 조회·주입)은 단계 13([[REACTION]])에서 추가됐다. 삭제된 댓글 수정을 막는 `CANNOT_EDIT_DELETED` 로직이 이 절의 핵심이다.
 
 같은 이유로 **삭제된 댓글에 답글 달기도 금지** — `validateReplyTarget`의 두 번째 검증(§2).
 
@@ -412,17 +436,22 @@ jpa:
 응답 변환에서 최상위 댓글의 `children`은 재귀적으로 매핑해야 하지만, **대댓글의 `children`은 1단계 정책상 항상 비어 있다**. 그런데도 코드에서 `child.getChildren()`을 건드리면 Hibernate가 "이 대댓글에 자식이 있는지" 확인하러 로딩을 시도한다(그리고 실제로 없으므로 빈 결과가 온다) — 낭비다.
 
 ```java
-public static CommentResponse from(Comment comment) {
+public static CommentResponse from(Comment comment, Map<Long, CommentReactionSummary> reactions) {
   // 대댓글(비-root)의 children은 1단계 정책상 항상 비어 있으므로 접근조차 하지 않는다
   // (불필요한 빈 컬렉션 배치 로딩 방지). 최상위 댓글만 children을 매핑한다.
   List<CommentResponse> children = comment.isRoot()
-      ? comment.getChildren().stream().map(CommentResponse::from).toList()
+      ? comment.getChildren().stream().map(child -> from(child, reactions)).toList()
       : List.of();
+  CommentReactionSummary summary =
+      reactions.getOrDefault(comment.getId(), CommentReactionSummary.empty());
   return new CommentResponse(
       comment.getId(),
       comment.getAuthor().getUsername(),
       comment.isDeleted() ? DELETED_CONTENT : comment.getContent(),
       comment.isDeleted(),
+      summary.likeCount(),      // 단계 13
+      summary.dislikeCount(),   // 단계 13
+      summary.myReaction(),     // 단계 13
       comment.getCreatedAt(),
       children);
 }
@@ -438,16 +467,29 @@ public static CommentResponse from(Comment comment) {
 
 ```java
 @Transactional(readOnly = true)
-public Page<CommentResponse> getComments(Long postId, Pageable pageable) {
+public Page<CommentResponse> getComments(Long postId, Long viewerId, Pageable pageable) {
   if (!postRepository.existsById(postId)) {
     throw new NotFoundException(ErrorCode.POST_NOT_FOUND);
   }
-  return commentRepository.findByPostIdAndParentIsNull(postId, pageable)
-      .map(CommentResponse::from);
+  Page<Comment> page = commentRepository.findByPostIdAndParentIsNull(postId, pageable);
+
+  // 페이지의 모든 comment id(최상위 + 대댓글)를 모아 반응을 한 번에 집계(N+1 회피).
+  List<Long> commentIds = new ArrayList<>();
+  for (Comment root : page.getContent()) {
+    commentIds.add(root.getId());
+    root.getChildren().forEach(reply -> commentIds.add(reply.getId()));
+  }
+  Map<Long, CommentReactionSummary> reactions =
+      reactionService.getCommentReactions(commentIds, viewerId);
+
+  return page.map(comment -> CommentResponse.from(comment, reactions));
 }
 ```
 
-`.map(CommentResponse::from)`이 트랜잭션 안에서 실행되므로 `getChildren()`/`getAuthor()` 같은 LAZY 접근이 안전하고, `@BatchSize`/`default_batch_fetch_size`도 이 시점에 발동한다. **DTO 변환을 트랜잭션 경계 안으로 유지하는 것**이 open-in-view=false 환경의 대원칙이다.
+`page.map(comment -> CommentResponse.from(comment, reactions))`가 트랜잭션 안에서 실행되므로 `getChildren()`/`getAuthor()` 같은 LAZY 접근이 안전하고, `@BatchSize`/`default_batch_fetch_size`도 이 시점에 발동한다. **DTO 변환을 트랜잭션 경계 안으로 유지하는 것**이 open-in-view=false 환경의 대원칙이다.
+
+> [!NOTE]
+> 단계 11의 `getComments`는 `getComments(Long postId, Pageable pageable)`였고 본문은 `findByPostIdAndParentIsNull(...).map(CommentResponse::from)` 한 줄이었다. `viewerId` 파라미터와 반응 집계(`commentIds` 수집 → `getCommentReactions` → `from(comment, reactions)`)는 단계 13([[REACTION]])에서 추가됐다. open-in-view=false 관점의 교훈("DTO 변환을 트랜잭션 안에서")은 두 버전 모두 동일하다.
 
 ---
 
@@ -502,12 +544,15 @@ public class CommentController {
   }
 
   // 조회는 공개 — GET /api/v1/posts/** permitAll 규칙에 이미 포함된다(SecurityConfig).
+  // 단계 13: 로그인 사용자면 principal이 주입되어 myReaction을 채운다(비로그인은 null).
   @GetMapping("/posts/{postId}/comments")
   public Page<CommentResponse> getComments(
       @PathVariable Long postId,
+      @AuthenticationPrincipal CustomUserDetails userDetails,
       @PageableDefault(size = 10, sort = "createdAt", direction = Sort.Direction.DESC)
       Pageable pageable) {
-    return commentService.getComments(postId, pageable);
+    Long viewerId = userDetails == null ? null : userDetails.getId();
+    return commentService.getComments(postId, viewerId, pageable);
   }
 
   // 작성자만 수정 — 댓글이 없으면 @commentSecurity가 404, 작성자가 아니면 false → 403.
@@ -515,8 +560,9 @@ public class CommentController {
   @PutMapping("/comments/{id}")
   public CommentResponse update(
       @PathVariable Long id,
+      @AuthenticationPrincipal CustomUserDetails userDetails,
       @Valid @RequestBody CommentUpdateRequest request) {
-    return commentService.update(id, request);
+    return commentService.update(id, userDetails.getId(), request);
   }
 
   @PreAuthorize("@commentSecurity.isAuthor(#id, authentication.principal)")
@@ -527,6 +573,9 @@ public class CommentController {
   }
 }
 ```
+
+> [!NOTE]
+> 조회·수정 핸들러의 `@AuthenticationPrincipal CustomUserDetails userDetails` 파라미터와 `viewerId` 전달은 단계 13([[REACTION]])에서 추가됐다. 단계 11의 `getComments`는 principal 없이 `getComments(postId, pageable)`를, `update`는 `update(id, request)`를 호출했다. 조회는 비로그인도 허용되므로 `userDetails == null` 방어가 필요하고(그래야 `myReaction`이 null), 수정은 `@PreAuthorize`가 이미 로그인을 보장하므로 `userDetails`가 non-null이다. 인가 규칙(작성자만 수정/삭제) 자체는 단계 11 그대로다.
 
 | Method | Path | 인가 |
 |--------|------|------|
@@ -592,7 +641,7 @@ public class CommentController {
 | 배치 로딩 2단 | `@BatchSize`가 children을 IN으로 묶고, `default_batch_fetch_size: 100`이 대댓글의 author 같은 2차 LAZY까지 자동 배치 |
 | 응답 최적화 | `CommentResponse.from`이 `isRoot` 가드로 대댓글의 빈 children 로딩을 원천 회피 |
 | 인가 | `@PreAuthorize("@commentSecurity.isAuthor(...)")` — `PostSecurity`와 동일 패턴 · SecurityConfig 코드 변경 0 |
-| open-in-view=false | 서비스가 트랜잭션 안에서 `.map(CommentResponse::from)` — LAZY 접근이 전부 트랜잭션 경계 내에서 발동 |
+| open-in-view=false | 서비스가 트랜잭션 안에서 `page.map(comment -> CommentResponse.from(comment, reactions))` — LAZY 접근이 전부 트랜잭션 경계 내에서 발동 |
 
 ---
 

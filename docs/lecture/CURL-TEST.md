@@ -201,22 +201,32 @@ curl -i -X POST $B/boards \
 
 ```bash
 curl -i -X POST $B/boards/1/posts \
-  -H "Content-Type: application/json" \
-  -d '{"title":"제목","content":"내용"}'
+  -F 'post={"title":"제목","content":"내용"};type=application/json'
 ```
 
 **기대**: `401 Unauthorized` (`LOGIN_REQUIRED`)
 
+> 단계 10부터 글 작성/수정은 `multipart/form-data`다(`consumes = MULTIPART_FORM_DATA_VALUE`). 글 본문은 `post` 파트(JSON), 이미지는 `images` 파트(선택). 여기서는 토큰이 없어 컨트롤러 진입 전에 401이 나므로 본문 형식과 무관하게 실패한다.
+
 ### 5-2. alice가 글 작성 (→ 201)
 
 ```bash
+# 이미지 없이 (post 파트만)
 curl -i -X POST $B/boards/1/posts \
   -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"title":"alice의 첫 글","content":"JWT로 작성"}'
+  -F 'post={"title":"alice의 첫 글","content":"JWT로 작성"};type=application/json'
+
+# 이미지 첨부 (images 파트 반복 — 최대 5장)
+curl -i -X POST $B/boards/1/posts \
+  -H "Authorization: Bearer $TOKEN" \
+  -F 'post={"title":"이미지 글","content":"첨부 있음"};type=application/json' \
+  -F 'images=@a.png;type=image/png' \
+  -F 'images=@b.png;type=image/png'
 ```
 
-**기대**: `201 Created` — `authorUsername`이 `alice`로 들어간다(토큰에서 추출).
+**기대**: `201 Created` — `authorUsername`이 `alice`로 들어간다(토큰에서 추출). 이미지를 올리면 `images` 배열에 `/images/{uuid}.png` URL이 담긴다.
+
+> `-F 'post=...;type=application/json'`처럼 파트에 `type`을 명시해야 `@RequestPart("post")`가 Jackson으로 역직렬화한다. 빠뜨리면 파트가 `text/plain`으로 붙어 415가 난다. JSON 방식(`-H "Content-Type: application/json" -d ...`)으로 호출하면 415 `UNSUPPORTED_MEDIA_TYPE`다.
 
 ### 5-3. 글 목록(페이징) / 상세 조회 (공개)
 
@@ -239,24 +249,33 @@ BOB=$(curl -s -X POST $B/auth/login -H "Content-Type: application/json" \
 
 curl -i -X PUT $B/posts/1 \
   -H "Authorization: Bearer $BOB" \
-  -H "Content-Type: application/json" \
-  -d '{"title":"탈취 시도","content":"남의 글"}'
+  -F 'post={"title":"탈취 시도","content":"남의 글"};type=application/json'
 ```
 
 **기대**: `403 Forbidden` (`POST_ACCESS_DENIED`)
 
+> 수정도 multipart다. JSON(`-H "Content-Type: application/json"`)으로 보내면 `consumes` 협상 단계에서 415가 나 `@PreAuthorize`(소유권 검사)까지 도달하지 못한다.
+
 ### 5-5. alice 본인 글 수정/삭제 (→ 200 / 204)
 
 ```bash
+# 텍스트만 수정 (이미지 변경 없음)
 curl -i -X PUT $B/posts/1 \
   -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"title":"수정한 제목","content":"본인은 가능"}'
+  -F 'post={"title":"수정한 제목","content":"본인은 가능"};type=application/json'
+
+# 이미지 델타 수정: id=100 삭제 + new.png 추가 (deleteImageIds는 post 파트 JSON 안에)
+curl -i -X PUT $B/posts/1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -F 'post={"title":"수정한 제목","content":"본인은 가능","deleteImageIds":[100]};type=application/json' \
+  -F 'images=@new.png;type=image/png'
 
 curl -i -X DELETE $B/posts/1 -H "Authorization: Bearer $TOKEN"
 ```
 
 **기대**: 수정 `200 OK`, 삭제 `204 No Content`
+
+> 이미지는 **델타 방식**이다 — 언급하지 않은 기존 이미지는 유지되고, `deleteImageIds`의 id만 삭제, `images` 파트만 추가된다(자세한 규약은 FILE-UPLOAD.md §2).
 
 ---
 
@@ -401,9 +420,9 @@ ADMIN=$(curl -s -X POST $B/auth/login -H "Content-Type: application/json" \
 curl -s -X POST $B/boards -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
   -d '{"name":"자유게시판","description":"아무 이야기나"}' >/dev/null
 
-# 글 작성 → 조회
-curl -s -X POST $B/boards/1/posts -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"title":"제목","content":"내용"}'
+# 글 작성(multipart) → 조회
+curl -s -X POST $B/boards/1/posts -H "Authorization: Bearer $TOKEN" \
+  -F 'post={"title":"제목","content":"내용"};type=application/json'
 curl -s "$B/boards/1/posts?page=0&size=10"
 ```
 

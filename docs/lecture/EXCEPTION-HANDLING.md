@@ -159,7 +159,7 @@ public enum ErrorCode {
   NICKNAME_DUPLICATED(HttpStatus.CONFLICT, "이미 사용 중인 nickname입니다."),
 
   POST_ACCESS_DENIED(HttpStatus.FORBIDDEN, "게시글에 대한 권한이 없습니다."),
-  ADMIN_ONLY(HttpStatus.FORBIDDEN, "관리자만 수행할 수 있습니다."),
+  ACCESS_DENIED(HttpStatus.FORBIDDEN, "접근 권한이 없습니다."),
 
   LOGIN_REQUIRED(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다."),
   LOGIN_FAILED(HttpStatus.UNAUTHORIZED, "username 또는 password가 올바르지 않습니다."),
@@ -185,7 +185,7 @@ public enum ErrorCode {
 |-----------|-----------|------|
 | **400** Bad Request | `INVALID_INPUT` | `@Valid` 검증 실패 |
 | **401** Unauthorized | `LOGIN_REQUIRED`, `LOGIN_FAILED` | 비로그인 / 로그인 실패 |
-| **403** Forbidden | `POST_ACCESS_DENIED`, `ADMIN_ONLY` | 권한 없음 |
+| **403** Forbidden | `POST_ACCESS_DENIED`, `ACCESS_DENIED` | 권한 없음 (관리자 전용은 `@PreAuthorize("hasRole('ADMIN')")` 거부 → `ACCESS_DENIED`) |
 | **404** Not Found | `USER/PROFILE/BOARD/POST_NOT_FOUND` | 리소스 없음 |
 | **409** Conflict | `DUPLICATE_USERNAME/EMAIL/BOARD_NAME`, `NICKNAME_DUPLICATED` | 중복 |
 | **500** Internal Server Error | `INTERNAL_ERROR` | 예상치 못한 예외 |
@@ -219,7 +219,7 @@ public enum ErrorCode {
 
 ```
 ErrorCode.POST_NOT_FOUND  ─▶  { status: 404,  message: "게시글을 찾을 수 없습니다." }
-ErrorCode.ADMIN_ONLY      ─▶  { status: 403,  message: "관리자만 수행할 수 있습니다." }
+ErrorCode.ACCESS_DENIED   ─▶  { status: 403,  message: "접근 권한이 없습니다." }
 ErrorCode.LOGIN_REQUIRED  ─▶  { status: 401,  message: "로그인이 필요합니다." }
 ```
 
@@ -364,13 +364,14 @@ private void validateAuthor(Post post, Long userId) {
   }
 }
 
-// BoardService — ADMIN이 아니면 403
-private void validateAdmin(Long userId) {
-  User user = userRepository.findById(userId)
-      .orElseThrow(() -> new NotFoundException(ErrorCode.USER_NOT_FOUND));
-  if (user.getRole() != Role.ADMIN) {
-    throw new ForbiddenException(ErrorCode.ADMIN_ONLY);
-  }
+// BoardController — 관리자 전용 엔드포인트는 서비스에서 직접 검사하지 않고
+// 메서드 보안(@PreAuthorize)으로 진입 자체를 막는다 (단계 6에서 이동).
+// 권한 미달 시 Spring이 AccessDeniedException을 던지고, 아래 핸들러가 403 ACCESS_DENIED로 변환한다.
+@PreAuthorize("hasRole('ADMIN')")
+@PostMapping
+@ResponseStatus(HttpStatus.CREATED)
+public BoardResponse create(@Valid @RequestBody BoardCreateRequest request) {
+  return boardService.create(request);
 }
 
 // PostController — 비로그인이면 401
@@ -426,7 +427,9 @@ public class GlobalExceptionHandler {
 }
 ```
 
-### 5-2. 핸들러 3개의 역할
+### 5-2. 핵심 핸들러 3개를 예로 들면
+
+> 위 코드와 아래 표는 이해를 돕기 위해 대표 핸들러 **3개만 발췌**한 것이다. 실제 `GlobalExceptionHandler`에는 `@ExceptionHandler`가 **12개** 있다(타입 미스매치·필수 파라미터 누락·미디어 타입·업로드 크기 초과·`AccessDeniedException`·`NoResourceFoundException` 등 프레임워크 예외까지 포괄). 전체 목록과 응답 예시는 [[CURL-TEST]] §7 참조.
 
 | 핸들러 | 잡는 예외 | 응답 |
 |--------|-----------|------|

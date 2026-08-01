@@ -213,6 +213,9 @@ curl -X POST http://localhost:8090/api/v1/boards/1/posts \
 }
 ```
 
+> [!NOTE]
+> `PostResponse`에는 `likeCount`/`dislikeCount`/`myReaction` 반응 필드도 있다(위 예시에서는 `...`로 생략). 이 필드들은 단계 13에서 추가되며, 이 단계의 서비스 코드는 방금 만든 글에 `0, 0, null`을 채워 넘긴다(§5).
+
 #### update도 multipart — 다만 "전체 교체"가 아니라 "델타"
 
 create가 multipart로 바뀌었으니 update(`PUT /api/v1/posts/{id}`)도 같은 요령이라고 착각하기 쉽지만, 여기서 **요청 스키마 자체가 갈라진다**. 텍스트 필드(`title`/`content`)는 새 값으로 통째로 덮으면 그만이지만, 이미지는 그렇게 못 한다. 이유는 **브라우저가 서버 파일 바이트를 갖고 있지 않기 때문**이다 — 갖고 있는 건 `/images/9f1a....png` 같은 URL뿐이다.
@@ -238,12 +241,14 @@ create가 multipart로 바뀌었으니 update(`PUT /api/v1/posts/{id}`)도 같�
 @PutMapping(path = "/posts/{id}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
 public PostResponse update(
     @PathVariable Long id,
+    @AuthenticationPrincipal CustomUserDetails userDetails,
     @Valid @RequestPart("post") PostUpdateRequest request,
     @RequestPart(value = "images", required = false) List<MultipartFile> images) {
-  return postService.update(id, request, images);
+  return postService.update(id, userDetails.getId(), request, images);
 }
 ```
 
+- `@AuthenticationPrincipal CustomUserDetails userDetails` — 조회자(=작성자) id를 서비스로 넘긴다. 수정 응답에도 반응 요약(`myReaction`)을 정확히 채우기 위함으로, 반응 기능 자체는 단계 13에서 붙는다(§5 update 참고).
 - `PostUpdateRequest`에 `deleteImageIds` 필드 추가 — null 허용(안 보내면 삭제 없음):
 
 ```java
@@ -439,7 +444,8 @@ public PostResponse create(
       }
     }
     Post saved = postRepository.save(post);
-    return PostResponse.from(saved);
+    // 방금 만든 글은 반응이 없으므로 0/0/null (반응 필드는 단계 13에서 추가).
+    return PostResponse.from(saved, 0, 0, null);
   } catch (RuntimeException e) {
     storedNames.forEach(fileStorageService::delete);
     throw e;
@@ -488,7 +494,8 @@ update는 한 트랜잭션 안에서 **삭제(기존 이미지 제거)와 생성
 
 ```java
 @Transactional
-public PostResponse update(Long id, PostUpdateRequest request, List<MultipartFile> images) {
+public PostResponse update(
+    Long id, Long viewerId, PostUpdateRequest request, List<MultipartFile> images) {
   Post post = findPost(id);
 
   Set<Long> deleteIds = request.deleteImageIds() == null
@@ -532,7 +539,11 @@ public PostResponse update(Long id, PostUpdateRequest request, List<MultipartFil
     });
   }
 
-  return PostResponse.from(post);
+  // 수정 시점의 반응 현황을 함께 반환(수정으로 반응이 바뀌진 않지만 응답 일관성 유지).
+  // viewerId(=작성자)를 넘겨 myReaction까지 정확히 채운다. 반응 기능은 단계 13에서 추가된다.
+  PostReactionSummary reaction = reactionService.getPostReaction(id, viewerId);
+  return PostResponse.from(
+      post, reaction.likeCount(), reaction.dislikeCount(), reaction.myReaction());
 }
 ```
 
@@ -608,7 +619,7 @@ private List<PostImage> images = new ArrayList<>();
 - 컨트롤러가 각 Post의 `getImages()`에 접근하면 `@BatchSize(100)`이 발동 → 여러 Post의 images를 **IN 쿼리 한 번**으로 로딩. Post 10개면 개별 SELECT 10번이 아니라 `SELECT ... FROM post_images WHERE post_id IN (?, ?, ..., ?)` 한 번
 - 순수 N+1과 비교하면 쿼리 수가 `1 + N`에서 `1 + ceil(N/100)`로 줄어든다 — 페이지 크기가 100 이하면 사실상 **2쿼리**
 
-**open-in-view=false 환경에서 안전한 이유** — `application.yaml`이 `spring.jpa.open-in-view: false`로 설정돼 있다. 이 상태에서는 서비스의 `@Transactional`이 끝나면 영속성 컨텍스트가 닫히고, 컨트롤러 이후에서 LAZY 접근을 시도하면 `LazyInitializationException`이 난다. 그런데 이 프로젝트의 DTO 변환은 **트랜잭션 안**에서 일어난다 — `PostService.getPosts`가 `.map(PostListResponse::from)`를, `PostService.getPost`가 `PostResponse.from(post)`을 반환 직전에 호출하므로 LAZY 접근이 트랜잭션 경계 안이다. `@BatchSize`도 이 시점에 발동한다. 그래서 안전.
+**open-in-view=false 환경에서 안전한 이유** — `application.yaml`이 `spring.jpa.open-in-view: false`로 설정돼 있다. 이 상태에서는 서비스의 `@Transactional`이 끝나면 영속성 컨텍스트가 닫히고, 컨트롤러 이후에서 LAZY 접근을 시도하면 `LazyInitializationException`이 난다. 그런데 이 프로젝트의 DTO 변환은 **트랜잭션 안**에서 일어난다 — `PostService.getPosts`가 `.map(PostListResponse::from)`를, `PostService.getPost`가 `PostResponse.from(post, ...)`을 반환 직전에 호출하므로 LAZY 접근이 트랜잭션 경계 안이다. `@BatchSize`도 이 시점에 발동한다. 그래서 안전.
 
 만약 컨트롤러에서 Entity를 반환하고 Jackson이 밖에서 LAZY 필드를 건드리는 구조였다면 이 조합은 곧장 `LazyInitializationException`으로 깨진다. **DTO 변환 지점을 트랜잭션 경계 안으로 유지하는 것**이 open-in-view=false 환경의 대원칙이다.
 
@@ -623,7 +634,9 @@ public PostResponse getPost(Long id, Long viewerId) {
   if (!post.isAuthor(viewerId)) {   // 작성자가 아니면(= 남이면) 증가
     post.increaseViewCount();
   }
-  return PostResponse.from(post);
+  PostReactionSummary reaction = reactionService.getPostReaction(id, viewerId);
+  return PostResponse.from(
+      post, reaction.likeCount(), reaction.dislikeCount(), reaction.myReaction());
 }
 ```
 
