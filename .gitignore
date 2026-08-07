@@ -42,5 +42,12 @@ out/
 ### 로컬 비밀값 (카카오 Secret 등) — .env.example만 커밋한다 ###
 .env
 
+### 인증서·개인키 (TLS 등) — 절대 커밋 금지 ###
+*.pem
+*.key
+*.crt
+*.p12
+*.keystore
+
 # 단계 10: 런타임 업로드 파일 (형상관리 대상 아님)
 /uploads/
