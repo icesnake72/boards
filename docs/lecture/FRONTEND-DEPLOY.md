@@ -252,3 +252,72 @@ compose에는 `frontend-react` 서비스를 **8071**로 추가한다(순수 JS�
 > 두 프론트가 **같은 백엔드·같은 네트워크·같은 프록시 방식**을 공유하고 포트만 다르다는 점이 학습 포인트다. "정적 파일을 어떻게 만드느냐(빌드 유무)"만 다를 뿐, 배포 아키텍처는 프레임워크와 무관하게 동일하다.
 
 **실측 검증(8071)**: 정적 `GET /` 200(`<div id="root">` + 해시 번들 `/assets/index-*.js` 200), `/api/v1/boards` 프록시 200(board 목록 반환), 컨테이너 healthy. `board-app`·`board-frontend`(8070)·`board-frontend-react`(8071) 3개 동시 기동 확인.
+
+---
+
+## 10. 두 프론트의 Nginx 설정 비교
+
+결론부터: **두 `nginx.conf`는 거의 같다.** `listen`/`root`/`index`/`location /`(SPA 폴백)/`location /api/`(프록시)는 **완전히 동일**하고, **기능적 차이는 정적 자산 캐시 블록 딱 하나**다. 그 차이도 nginx 자체가 아니라 "정적 산출물을 어떻게 만드느냐(빌드 유무)"에서 파생된다.
+
+### 10-1. 유일한 실질 차이 — 정적 자산 캐시 location
+
+| | `frontend/` (순수 JS) | `frontend-react/` (React·Vite) |
+|---|---|---|
+| 캐시 블록 | `location ~* \.(css\|js)$` | `location /assets/` |
+| 매칭 방식 | **확장자 정규식**(`.css`/`.js`) | **경로 접두어**(`/assets/` 하위) |
+| 왜 다른가 | 자산이 문서 루트에 **평면 배치** | Vite가 자산을 **`/assets/` 아래**에 모음 |
+
+이유는 **빌드 산출물 구조**가 다르기 때문이다(실측):
+
+```
+frontend/       (빌드 없음, 원본 그대로)      frontend-react/ (Vite 빌드)
+  index.html                                    index.html
+  app.js         ← 루트에 평면                   assets/
+  styles.css     ← 루트에 평면                     index-CNc_kvD6.js    ← 해시 파일명
+                                                  index-Ce1SRHoD.css   ← 해시 파일명
+```
+
+- 순수 JS는 `app.js`·`styles.css`가 **루트에 그대로** 있으니, 확장자로 잡는 `~* \.(css|js)$` 가 자연스럽다.
+- React(Vite)는 번들 파일이 **`/assets/` 아래에 해시 파일명**으로 생기니, `location /assets/` 접두어로 통째 잡는 게 자연스럽다.
+
+### 10-2. 동일한 부분 (프레임워크 무관)
+
+```nginx
+listen 80;
+root /usr/share/nginx/html;
+index index.html;
+
+location / {
+  try_files $uri $uri/ /index.html;   # 두 파일 모두 동일(SPA 폴백)
+}
+
+location /api/ {
+  proxy_pass http://board-app:8090;   # 두 파일 모두 동일(경로 미부착 → 원본 URI 유지)
+  proxy_set_header Host $host;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+**배포·API 연동의 뼈대는 프레임워크와 무관하게 같다** — 이게 핵심이다. 나머지 diff는 전부 주석 문구 차이일 뿐 동작에 영향이 없다.
+
+### 10-3. `try_files … /index.html` (SPA 폴백)의 의미 차이
+
+문법은 둘 다 같지만 **중요도가 다르다.**
+
+- 순수 JS: 현재 단일 페이지라 폴백이 발동할 일이 거의 없다(있어도 무해).
+- React: 지금은 라우팅이 없지만, **클라이언트 라우팅(react-router 등)을 도입하면 필수**가 된다. `/boards/1` 같은 경로로 새로고침하면 서버엔 그 파일이 없어 404가 나는데, `/index.html`로 폴백해야 React가 그 경로를 그려낸다.
+
+### 10-4. 운영 캐시 전략 (참고)
+
+실습용이라 둘 다 `expires 5m`로 짧게 뒀지만, 운영에선 **산출물 구조 차이가 캐시 전략 차이로** 이어진다.
+
+| | 순수 JS | React(Vite) |
+|---|---|---|
+| 파일명 | 고정(`app.js`) | **해시 포함**(`index-CNc_kvD6.js`) |
+| 권장 캐시 | 짧게 or `no-cache`(파일명이 안 바뀌어 갱신 감지 필요) | **`immutable`, 1년 장기 캐시**(내용 바뀌면 해시=파일명이 바뀌어 자동 무효화) |
+| `index.html` | — | **`no-cache`**(항상 최신 해시 참조를 받도록) |
+
+> [!TIP]
+> "해시 파일명 + index.html no-cache + 자산 immutable 장기 캐시"는 번들러 기반 프론트의 표준 캐시 패턴이다. 순수 JS는 파일명이 고정이라 이 자동 무효화를 못 쓰므로, 갱신 반영을 위해 캐시를 짧게 두거나 쿼리스트링 버전(`app.js?v=2`)을 쓴다.
