@@ -51,19 +51,38 @@ flowchart TD
 
 ## 3. 필요한 GitHub Secrets 목록
 
-저장소 → **Settings → Secrets and variables → Actions → Secrets** 에 아래 7개를 등록한다.
+저장소 → **Settings → Secrets and variables → Actions → Secrets** 에 등록한다.
+
+**필수(접속용):**
 
 | Secret 이름 | 값 | 설명 |
 |---|---|---|
-| `LIGHTSAIL_HOST` | `3.34.173.34` | Lightsail 인스턴스 공인 IP |
+| `LIGHTSAIL_HOST` | `3.34.173.34` | Lightsail 인스턴스 공인 고정 IP |
 | `LIGHTSAIL_USER` | `ubuntu` | SSH 사용자(Ubuntu 블루프린트 기준) |
 | `LIGHTSAIL_SSH_KEY` | `webserver_key.pem` **전체 내용** | SSH 개인키(아래 §4-2 주의) |
-| `KAKAO_REST_API` | 카카오 REST API 키 | 앱 `.env` 주입(기동 필수) |
-| `KAKAO_SECRET` | 카카오 Client Secret | 앱 `.env` 주입(기동 필수) |
-| `GOOGLE_CLIENT_ID` | 구글 OAuth 클라이언트 ID | 앱 `.env` 주입 |
-| `GOOGLE_CLIENT_SECRET` | 구글 OAuth Client Secret | 앱 `.env` 주입 |
 
-- **DB 접속값(root/1234, board)** 은 Secret이 아니라 compose 기본값·서버의 mysql-8 설정으로 처리한다(강의용). 운영에선 `DB_PASSWORD`도 Secret으로 빼는 것을 권장.
+**필수(앱·DB용 — `.env`·mysql-8에 주입):**
+
+| Secret 이름 | 값 | 설명 |
+|---|---|---|
+| `KAKAO_REST_API` | 카카오 REST API 키 | 기동 필수(fail-fast) |
+| `KAKAO_SECRET` | 카카오 Client Secret | 기동 필수(fail-fast) |
+| `GOOGLE_CLIENT_ID` | 구글 OAuth 클라이언트 ID | 소셜 로그인용 |
+| `GOOGLE_CLIENT_SECRET` | 구글 OAuth Client Secret | 소셜 로그인용 |
+| `DB_NAME` | `board` | 앱 DB명 + mysql-8 초기 DB |
+| `DB_USERNAME` | `root` | 앱 DB 사용자 |
+| `DB_PASSWORD` | `1234` | 앱 DB 비번 + mysql-8 root 비번 |
+
+**선택(등록해도 무방하나 파이프라인은 사용 안 함):**
+
+| Secret 이름 | 왜 미사용 |
+|---|---|
+| `DB_HOST` | compose가 컨테이너명 `mysql-8` 로 강제 주입 |
+| `DB_PORT` | compose가 `3306` 으로 강제 |
+| `APP_UPLOAD_DIR` | compose가 `/app/uploads` 로 강제(볼륨 마운트 지점) |
+
+> [!NOTE]
+> `deploy.yml` 은 Docker를 설치하지 않는다(서버에 미리 설치돼 있어야 함). 반면 `board-db-net` 네트워크와 `mysql-8` 컨테이너, 저장소 클론은 **없으면 스크립트가 자동 생성**한다(있으면 그대로 사용). 그래서 docker만 깔려 있으면 첫 push부터 배포가 완결된다.
 
 ---
 

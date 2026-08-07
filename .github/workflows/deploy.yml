@@ -5,9 +5,15 @@
 #       SSH 접속 → git pull → docker compose 재기동. "로컬에서 하던 방식 그대로"를
 #       원격 서버에서 자동 실행한다(별도 이미지 레지스트리 없이 서버에서 직접 빌드).
 #
+# 전제: 서버에 Docker/Compose가 이미 설치돼 있어야 한다(이 워크플로는 Docker를 설치하지 않는다).
+#       board-db-net 네트워크와 mysql-8 컨테이너, 저장소 클론은 아래 스크립트가
+#       "없으면 자동 생성"하므로, docker만 깔려 있으면 첫 배포부터 동작한다.
+#
 # 필요한 GitHub Secrets(설정 방법은 docs/lecture/CICD-GITHUB-ACTIONS.md 참고):
 #   LIGHTSAIL_HOST, LIGHTSAIL_USER, LIGHTSAIL_SSH_KEY,
-#   KAKAO_REST_API, KAKAO_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+#   KAKAO_REST_API, KAKAO_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+#   DB_NAME, DB_USERNAME, DB_PASSWORD
+#   (DB_HOST/DB_PORT/APP_UPLOAD_DIR 는 compose가 서버용 값으로 강제 주입하므로 미사용)
 # ────────────────────────────────────────────────────────────────────────────
 name: Deploy to Lightsail
 
@@ -57,25 +63,60 @@ jobs:
           host: ${{ secrets.LIGHTSAIL_HOST }}
           username: ${{ secrets.LIGHTSAIL_USER }}
           key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
-          # 앱 비밀값을 원격 셸 환경변수로 안전하게 전달(아래 script에서 .env로 씀)
-          envs: KAKAO_REST_API,KAKAO_SECRET,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET
+          # 앱/DB 비밀값을 원격 셸 환경변수로 안전하게 전달(아래 script에서 .env·mysql-8에 사용)
+          envs: KAKAO_REST_API,KAKAO_SECRET,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,DB_NAME,DB_USERNAME,DB_PASSWORD
           # 원격 서버에서 실행할 명령들
           script: |
-            set -euo pipefail                 # 오류 시 즉시 중단(안전)
+            set -euo pipefail
 
-            cd ~/board                         # 최초 세팅에서 git clone 해 둔 위치(설치 가이드 참고)
+            REPO_DIR="$HOME/board"
+            REPO_URL="https://github.com/icesnake72/boards.git"
 
-            echo "▶ 최신 코드 가져오기"
+            echo "▶ 저장소 준비(없으면 clone, 있으면 최신화)"
+            if [ ! -d "$REPO_DIR/.git" ]; then
+              git clone "$REPO_URL" "$REPO_DIR"
+            fi
+            cd "$REPO_DIR"
             git fetch --all
             git reset --hard origin/main       # 배포 브랜치. main 이외를 쓰면 이 줄을 변경
 
             echo "▶ .env 생성(Secrets → 서버). 카카오 키는 fail-fast라 비면 기동 실패"
+            # DB_HOST/DB_PORT/APP_UPLOAD_DIR 는 compose가 서버용 값으로 강제하므로 여기서 쓰지 않는다.
             cat > .env <<EOF
             KAKAO_REST_API=${KAKAO_REST_API}
             KAKAO_SECRET=${KAKAO_SECRET}
             GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
             GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+            DB_NAME=${DB_NAME}
+            DB_USERNAME=${DB_USERNAME}
+            DB_PASSWORD=${DB_PASSWORD}
             EOF
+
+            echo "▶ 전용 네트워크 준비(없으면 생성)"
+            docker network create board-db-net 2>/dev/null || true
+
+            echo "▶ mysql-8 준비(없으면 기동, 있으면 그대로 사용)"
+            if [ -n "$(docker ps -aq -f name=^mysql-8$)" ]; then
+              # 컨테이너는 있는데 멈춰 있으면 시작
+              [ -z "$(docker ps -q -f name=^mysql-8$)" ] && docker start mysql-8 || true
+            else
+              docker run -d --name mysql-8 \
+                --network board-db-net \
+                -e MYSQL_ROOT_PASSWORD="${DB_PASSWORD}" \
+                -e MYSQL_DATABASE="${DB_NAME}" \
+                -v mysql8-data:/var/lib/mysql \
+                mysql:8.0.33 --default-time-zone=+09:00
+            fi
+            # mysql-8 이 board-db-net 에 연결돼 있도록 보장(이미 연결돼 있으면 무시)
+            docker network connect board-db-net mysql-8 2>/dev/null || true
+
+            echo "▶ mysql-8 준비 대기(최대 ~60s)"
+            for i in $(seq 1 30); do
+              if docker exec mysql-8 mysqladmin ping -h127.0.0.1 -uroot -p"${DB_PASSWORD}" --silent >/dev/null 2>&1; then
+                echo "  mysql-8 ready"; break
+              fi
+              sleep 2
+            done
 
             echo "▶ 컨테이너 빌드·재기동(로컬과 동일한 docker compose)"
             docker compose up -d --build
@@ -85,5 +126,3 @@ jobs:
 
             echo "▶ 상태 확인"
             docker compose ps
-      # 주의: mysql-8 컨테이너와 board-db-net 네트워크는 이 워크플로가 만들지 않는다.
-      #       서버 최초 1회 세팅(설치 가이드)에서 준비해 두어야 한다.
