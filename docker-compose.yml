@@ -74,6 +74,28 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  # React(Vite) 버전 — 순수 JS 프론트와 구현 동일, 빌드만 멀티스테이지(Node→Nginx).
+  frontend-react:
+    build:
+      context: ./frontend-react
+      dockerfile: Dockerfile
+    image: board-frontend-react:latest
+    container_name: board-frontend-react
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "8071:80"                     # 브라우저: http://localhost:8071
+    networks:
+      - board-db-net                  # board-app 과 같은 네트워크(컨테이너명 프록시)
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
 networks:
   # 기존 mysql-8 이 물려 있는 전용 브리지 네트워크(외부 생성). compose가 지우지 않는다.
   board-db-net:

@@ -175,3 +175,80 @@ docker compose ps                   # 상태 확인
 
 > [!NOTE]
 > 백엔드에 CORS를 직접 열지 않은 것은 의도다. 리버스 프록시로 same-origin을 만들면 CORS 설정 없이도 되고, 이는 실제 배포에서 가장 흔한 구조다. 프론트를 백엔드와 다른 도메인에서 직접 호출해야 하는 경우에만 백엔드 CORS 설정을 검토한다.
+
+---
+
+## 9. React(Vite) 변형 — `frontend-react/` (구현 동일, 빌드만 추가)
+
+같은 화면(게시판 목록)을 React로도 구현해 나란히 배포한다. **배포 방식(Nginx 리버스 프록시)과 API 연동은 완전히 동일**하고, 차이는 딱 하나 — **React는 빌드 단계가 필요**하다는 점이다. 그래서 Dockerfile이 멀티스테이지가 된다.
+
+```mermaid
+flowchart LR
+  subgraph BUILD["빌드 단계 (node:20-alpine)"]
+    SRC["src/*.jsx + package.json"] -->|"npm run build (Vite)"| DIST["dist/ 정적 번들"]
+  end
+  DIST -->|"COPY --from=build"| NGINX["nginx:alpine (정적 서빙 + /api 프록시)"]
+  NGINX -->|"board-app:8090"| APP["board-app"]
+```
+
+핵심 차이는 Dockerfile의 build 스테이지뿐이다:
+
+```dockerfile
+# ── build stage: JSX/모듈 → 정적 번들 ──
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm install
+COPY . .
+RUN npm run build                 # → /app/dist
+
+# ── runtime stage: 순수 JS 버전과 동일 ──
+FROM nginx:1.27-alpine
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
+```
+
+- **`nginx.conf` 는 순수 JS 버전과 사실상 동일**(정적 서빙 + `/api/` → `board-app:8090` 프록시). React 라우팅 대비로 `try_files ... /index.html` SPA 폴백만 의미가 커진다.
+- **`App.jsx` 도 로직 동일**: 상대경로 `/api/v1/boards`를 `fetch` → 상태(로딩/에러/빈목록/목록) 렌더. React는 `{board.name}` 을 기본 이스케이프하므로 XSS도 자동 안전(순수 JS의 `textContent`와 같은 효과).
+- **개발 편의**: `vite.config.js`에 dev 서버 프록시(`/api` → `localhost:8090`)를 둬서 `npm run dev` 로컬 개발도 same-origin으로 된다(컨테이너 배포에선 이 프록시가 아니라 Nginx가 담당).
+
+compose에는 `frontend-react` 서비스를 **8071**로 추가한다(순수 JS는 8070, 백엔드 8090):
+
+```yaml
+  frontend-react:
+    build:
+      context: ./frontend-react
+      dockerfile: Dockerfile
+    image: board-frontend-react:latest
+    container_name: board-frontend-react
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "8071:80"
+    networks:
+      - board-db-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]   # localhost→IPv6 함정 회피(§7)
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+```
+
+### 순수 JS vs React 비교
+
+| 항목 | `frontend/` (순수 JS) | `frontend-react/` (React·Vite) |
+|---|---|---|
+| 포트 | 8070 | 8071 |
+| Dockerfile | 단일 스테이지(nginx에 파일 얹기) | **멀티스테이지**(node 빌드 → nginx) |
+| 빌드 도구 | 없음 | Vite (npm install + build) |
+| 이미지에 들어가는 것 | 원본 HTML/CSS/JS 그대로 | **번들·minify된 `dist/`**(해시 파일명) |
+| 배포·API 연동 | Nginx 리버스 프록시 | **동일** |
+| XSS 방지 | `textContent` 수동 | JSX 기본 이스케이프 |
+
+> [!TIP]
+> 두 프론트가 **같은 백엔드·같은 네트워크·같은 프록시 방식**을 공유하고 포트만 다르다는 점이 학습 포인트다. "정적 파일을 어떻게 만드느냐(빌드 유무)"만 다를 뿐, 배포 아키텍처는 프레임워크와 무관하게 동일하다.
+
+**실측 검증(8071)**: 정적 `GET /` 200(`<div id="root">` + 해시 번들 `/assets/index-*.js` 200), `/api/v1/boards` 프록시 200(board 목록 반환), 컨테이너 healthy. `board-app`·`board-frontend`(8070)·`board-frontend-react`(8071) 3개 동시 기동 확인.
