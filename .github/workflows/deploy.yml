@@ -58,12 +58,23 @@ jobs:
     steps:
       - name: Lightsail SSH 접속 후 배포
         uses: appleboy/ssh-action@v1.2.0
+        # Secrets를 먼저 러너 환경변수로 노출해야 아래 envs:가 원격으로 전달할 수 있다.
+        # (envs:는 "이미 존재하는 env 이름"을 원격에 넘기는 것이므로, 이 블록이 없으면
+        #  원격에서 unbound variable 로 실패한다.)
+        env:
+          KAKAO_REST_API: ${{ secrets.KAKAO_REST_API }}
+          KAKAO_SECRET: ${{ secrets.KAKAO_SECRET }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         with:
           # 접속 정보(Secrets). LIGHTSAIL_SSH_KEY 는 webserver_key.pem 전체 내용.
           host: ${{ secrets.LIGHTSAIL_HOST }}
           username: ${{ secrets.LIGHTSAIL_USER }}
           key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
-          # 앱/DB 비밀값을 원격 셸 환경변수로 안전하게 전달(아래 script에서 .env·mysql-8에 사용)
+          # 위 env: 로 노출된 값을 원격 셸 환경변수로 전달(script에서 .env·mysql-8에 사용)
           envs: KAKAO_REST_API,KAKAO_SECRET,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,DB_NAME,DB_USERNAME,DB_PASSWORD
           # 원격 서버에서 실행할 명령들
           script: |
