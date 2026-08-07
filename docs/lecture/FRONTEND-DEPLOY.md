@@ -20,13 +20,16 @@ status: 완료
 
 ```mermaid
 flowchart LR
-  B["브라우저 (localhost:8070)"] -->|"정적 HTML/CSS/JS"| NGINX["board-frontend (Nginx)"]
+  B["브라우저 (localhost)"] -->|"정적 HTML/CSS/JS"| NGINX["board-frontend (Nginx :80)"]
   B -->|"/api/v1/boards"| NGINX
-  NGINX -->|"location /api/ 프록시"| APP["board-app (Spring Boot :8090)"]
+  NGINX -->|"location /api/ 프록시"| APP["board-app (Spring Boot :8090 · 비공개)"]
   APP -->|"JDBC"| DB[("mysql-8 : board")]
 ```
 
 이 방식의 핵심은 **백엔드를 건드리지 않는 것**이다. 백엔드엔 CORS 설정이 없지만, 프록시가 same-origin으로 만들어 주므로 그대로 동작한다.
+
+> [!NOTE]
+> 실제 배포(committed compose)에서 **백엔드(`board-app:8090`)는 host에 포트를 publish하지 않아 외부에서 직접 접근할 수 없다.** `board-app:8090`은 board-db-net 안에서 Nginx가 프록시하는 **내부 주소**일 뿐이며, 공개 진입점은 프론트뿐이다. 순수 JS 프론트는 host **80**(공개 진입점), React 프론트는 **8071**로 노출된다(자세한 배포 구조는 [[DEPLOY-LIGHTSAIL]]).
 
 관련 파일(모두 `frontend/`): `index.html`, `styles.css`, `app.js`, `nginx.conf`, `Dockerfile`. compose에는 `frontend` 서비스가 추가된다.
 
@@ -84,6 +87,9 @@ server {
 - **`proxy_pass http://board-app:8090;` 에 경로를 붙이지 않는다.** 붙이면(`.../`) `/api/` 접두어가 잘려 백엔드 라우트(`/api/v1/...`)와 어긋난다. 경로 없이 두면 원본 URI(`/api/v1/boards`)가 그대로 전달된다.
 - **`board-app` 은 컨테이너명**이다. 같은 docker 네트워크(`board-db-net`)에 있으면 docker DNS가 이 이름을 백엔드 컨테이너 IP로 해석한다.
 
+> [!NOTE]
+> 실제 배포된 순수 JS 프론트의 `nginx.conf`는 `/api/` 외에 **`/oauth2/`·`/login/oauth2/`도 백엔드로 프록시**한다. 백엔드가 비공개라, 소셜 로그인 개시·콜백을 이 공개 프론트(80)가 대신 중계해야 브라우저가 로그인 흐름을 탈 수 있기 때문이다(`X-Forwarded-Host`로 백엔드의 `redirect_uri`를 공개 주소로 맞춘다). 상세는 [[DEPLOY-LIGHTSAIL]] §10 참고. **React 프론트(`frontend-react/`)의 Nginx는 `/api/`만 프록시**하고 oauth 프록시가 없어, 소셜 로그인 개시는 80 진입점을 쓴다.
+
 ---
 
 ## 4. 프론트 Dockerfile
@@ -115,7 +121,7 @@ CMD ["nginx", "-g", "daemon off;"]
       app:
         condition: service_healthy   # 백엔드가 응답 가능해진 뒤 노출
     ports:
-      - "8070:80"                     # 호스트 8080은 점유 중이라 8070 사용
+      - "80:80"                       # 공개 진입점이라 표준 HTTP 80 사용
     networks:
       - board-db-net                  # board-app 과 같은 네트워크라야 컨테이너명 프록시가 됨
     healthcheck:
@@ -137,16 +143,16 @@ CMD ["nginx", "-g", "daemon off;"]
 ```bash
 docker compose up -d --build        # app + frontend 함께
 docker compose ps                   # 상태 확인
-# 브라우저: http://localhost:8070
+# 브라우저: http://localhost  (80 — 포트 생략)
 ```
 
 실측 검증 결과:
 
 | 확인 | 결과 |
 |---|---|
-| 정적 서빙 | `GET http://localhost:8070/` → 200, `<title>게시판 — 배포 실습</title>` |
+| 정적 서빙 | `GET http://localhost/` → 200, `<title>게시판 — 배포 실습</title>` |
 | 정적 자산 | `styles.css` / `app.js` → 200 |
-| API 프록시 | `GET http://localhost:8070/api/v1/boards` → 200, 백엔드의 board 목록 JSON 반환 |
+| API 프록시 | `GET http://localhost/api/v1/boards` → 200, 백엔드의 board 목록 JSON 반환 |
 | 컨테이너 | `board-frontend`(healthy), `board-app`(healthy) 동시 기동 |
 
 ---
@@ -157,7 +163,7 @@ docker compose ps                   # 상태 확인
 
 > 컨테이너 안에서 `localhost`는 **`::1`(IPv6)로 먼저 해석**되는데, Nginx는 `listen 80;`(IPv4)만 바인딩한다 → IPv6로 연결 시도 → 거부.
 
-호스트에서 `curl localhost:8070`은 잘 되므로 헷갈리기 쉽다(호스트→컨테이너 포워딩은 IPv4). **컨테이너 내부 헬스체크는 `http://127.0.0.1/`로 명시**해 해결했다. (대안: nginx에 `listen [::]:80;`도 추가.)
+호스트에서 `curl localhost`(80)은 잘 되므로 헷갈리기 쉽다(호스트→컨테이너 포워딩은 IPv4). **컨테이너 내부 헬스체크는 `http://127.0.0.1/`로 명시**해 해결했다. (대안: nginx에 `listen [::]:80;`도 추가.)
 
 ---
 
@@ -167,7 +173,7 @@ docker compose ps                   # 상태 확인
 
 | 항목 | 실습(현재) | 운영 |
 |---|---|---|
-| 프론트 포트 | HTTP 8070 | 443(HTTPS) + 인증서(TLS 종료를 Nginx에서) |
+| 프론트 포트 | HTTP 80 | 443(HTTPS) + 인증서(TLS 종료를 Nginx에서) |
 | 정적 캐시 | 5분(짧게) | 파일 해시 기반 장기 캐시 + `Cache-Control` 세분화 |
 | 프록시 경로 | `/api/` 단순 프록시 | 타임아웃·버퍼·에러 페이지·요청 크기 제한 추가 |
 | 빌드 | 정적 파일 그대로 | 번들러(빌드 단계)로 minify·해시 파일명 |
@@ -212,7 +218,7 @@ COPY --from=build /app/dist /usr/share/nginx/html
 - **`App.jsx` 도 로직 동일**: 상대경로 `/api/v1/boards`를 `fetch` → 상태(로딩/에러/빈목록/목록) 렌더. React는 `{board.name}` 을 기본 이스케이프하므로 XSS도 자동 안전(순수 JS의 `textContent`와 같은 효과).
 - **개발 편의**: `vite.config.js`에 dev 서버 프록시(`/api` → `localhost:8090`)를 둬서 `npm run dev` 로컬 개발도 same-origin으로 된다(컨테이너 배포에선 이 프록시가 아니라 Nginx가 담당).
 
-compose에는 `frontend-react` 서비스를 **8071**로 추가한다(순수 JS는 8070, 백엔드 8090):
+compose에는 `frontend-react` 서비스를 **8071**로 추가한다(순수 JS 프론트는 host **80**, 백엔드 `board-app:8090`은 host publish 없는 내부 전용):
 
 ```yaml
   frontend-react:
@@ -241,7 +247,7 @@ compose에는 `frontend-react` 서비스를 **8071**로 추가한다(순수 JS�
 
 | 항목 | `frontend/` (순수 JS) | `frontend-react/` (React·Vite) |
 |---|---|---|
-| 포트 | 8070 | 8071 |
+| 포트 | 80 | 8071 |
 | Dockerfile | 단일 스테이지(nginx에 파일 얹기) | **멀티스테이지**(node 빌드 → nginx) |
 | 빌드 도구 | 없음 | Vite (npm install + build) |
 | 이미지에 들어가는 것 | 원본 HTML/CSS/JS 그대로 | **번들·minify된 `dist/`**(해시 파일명) |
@@ -251,7 +257,7 @@ compose에는 `frontend-react` 서비스를 **8071**로 추가한다(순수 JS�
 > [!TIP]
 > 두 프론트가 **같은 백엔드·같은 네트워크·같은 프록시 방식**을 공유하고 포트만 다르다는 점이 학습 포인트다. "정적 파일을 어떻게 만드느냐(빌드 유무)"만 다를 뿐, 배포 아키텍처는 프레임워크와 무관하게 동일하다.
 
-**실측 검증(8071)**: 정적 `GET /` 200(`<div id="root">` + 해시 번들 `/assets/index-*.js` 200), `/api/v1/boards` 프록시 200(board 목록 반환), 컨테이너 healthy. `board-app`·`board-frontend`(8070)·`board-frontend-react`(8071) 3개 동시 기동 확인.
+**실측 검증(8071)**: 정적 `GET /` 200(`<div id="root">` + 해시 번들 `/assets/index-*.js` 200), `/api/v1/boards` 프록시 200(board 목록 반환), 컨테이너 healthy. `board-app`(비공개)·`board-frontend`(80)·`board-frontend-react`(8071) 3개 동시 기동 확인.
 
 ---
 
