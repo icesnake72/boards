@@ -21,6 +21,9 @@ name: Deploy to Lightsail
 on:
   push:
     branches: ["main"]      # 다른 브랜치를 배포하려면 여기와 아래 deploy 스크립트의 origin/main 을 함께 변경
+    paths-ignore:           # 문서만 바뀐 커밋은 재배포하지 않는다(서버 재빌드 낭비 방지)
+      - "docs/**"
+      - "**/*.md"
   workflow_dispatch:        # 수동 트리거 버튼(코드 변경 없이 재배포할 때)
 
 # 동시에 여러 배포가 겹치지 않게 — 새 실행이 뜨면 진행 중인 이전 배포는 취소
@@ -35,10 +38,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 소스 체크아웃
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: JDK 21 설치(Temurin)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
