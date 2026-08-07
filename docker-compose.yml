@@ -50,6 +50,30 @@ services:
       start_period: 40s
     restart: unless-stopped
 
+  # 배포 실습용 최소 프론트(순수 HTML/CSS/JS) — Nginx가 정적 서빙 + /api 프록시.
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: board-frontend:latest
+    container_name: board-frontend
+    depends_on:
+      app:
+        condition: service_healthy   # 백엔드가 응답 가능해진 뒤 노출
+    ports:
+      - "8070:80"                     # 브라우저: http://localhost:8070 (호스트 8080은 점유 중이라 8070)
+    networks:
+      - board-db-net                  # board-app 과 같은 네트워크라야 컨테이너명으로 프록시된다
+    healthcheck:
+      # localhost는 컨테이너 안에서 ::1(IPv6)로 먼저 해석되는데 nginx는 IPv4만 리슨한다
+      # → 127.0.0.1 로 명시해야 연결된다.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
 networks:
   # 기존 mysql-8 이 물려 있는 전용 브리지 네트워크(외부 생성). compose가 지우지 않는다.
   board-db-net:
