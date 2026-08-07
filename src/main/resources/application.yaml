@@ -1,5 +1,9 @@
 server:
   port: 8090
+  # 리버스 프록시(Nginx) 뒤에서 실행될 때, X-Forwarded-* 헤더로 원래 요청의 host/proto를
+  # 복원한다. OAuth2 redirect-uri({baseUrl})가 내부 board-app:8090 이 아니라 실제 공개 주소
+  # (http://3.34.173.34/login/oauth2/code/*)로 계산되게 하는 핵심 설정.
+  forward-headers-strategy: framework
 
 spring:
   application:

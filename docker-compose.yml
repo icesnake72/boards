@@ -36,8 +36,8 @@ services:
       # 운영(HTTPS) 전환 시 아래를 오버라이드한다.
       # JWT_SECRET: <운영 전용 Base64 시크릿으로 교체>
       # APP_REFRESH_COOKIE_SECURE: "true"
-    ports:
-      - "8090:8090"
+    # 백엔드는 호스트에 포트를 publish 하지 않는다 → 외부에서 직접 접근 불가.
+    # 프론트(Nginx)만 같은 board-db-net 안에서 board-app:8090 으로 접근한다.
     volumes:
       - uploads:/app/uploads          # 업로드 이미지 영속화
     networks:
@@ -61,7 +61,7 @@ services:
       app:
         condition: service_healthy   # 백엔드가 응답 가능해진 뒤 노출
     ports:
-      - "8070:80"                     # 브라우저: http://localhost:8070 (호스트 8080은 점유 중이라 8070)
+      - "80:80"                       # 공개 진입점 → http://3.34.173.34 (포트 생략)
     networks:
       - board-db-net                  # board-app 과 같은 네트워크라야 컨테이너명으로 프록시된다
     healthcheck:

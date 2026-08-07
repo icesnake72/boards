@@ -137,3 +137,23 @@ jobs:
 
             echo "▶ 상태 확인"
             docker compose ps
+
+            echo "▶ 검증: 프론트(80) 준비 대기"
+            for i in $(seq 1 30); do
+              code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1/ || echo 000)
+              [ "$code" = "200" ] && { echo "  frontend(80) → 200 ready"; break; }
+              sleep 2
+            done
+
+            echo "▶ 검증: 외부 노출 여부(백엔드·DB는 publish 없어야 비공개)"
+            apppub=$(docker port board-app 2>/dev/null || true)
+            dbpub=$(docker port mysql-8 2>/dev/null || true)
+            echo "  board-app publish: ${apppub:-없음(비공개 OK)}"
+            echo "  mysql-8  publish: ${dbpub:-없음(비공개 OK)}"
+
+            echo "▶ 검증: OAuth 개시(프론트80 프록시 경유, Host=3.34.173.34) — 302 + redirect_uri 확인"
+            for p in kakao google; do
+              echo "  [$p]"
+              curl -s -o /dev/null -D - -H "Host: 3.34.173.34" "http://127.0.0.1/oauth2/authorization/$p" \
+                | tr -d '\r' | grep -iE "^HTTP/|^location:" | sed 's/^/    /' || true
+            done
