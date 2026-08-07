@@ -1,0 +1,89 @@
+# ────────────────────────────────────────────────────────────────────────────
+# GitHub Actions CI/CD — AWS Lightsail 배포
+#
+# 흐름: (1) test 잡에서 빌드·테스트(H2) 통과 확인 → (2) deploy 잡에서 Lightsail에
+#       SSH 접속 → git pull → docker compose 재기동. "로컬에서 하던 방식 그대로"를
+#       원격 서버에서 자동 실행한다(별도 이미지 레지스트리 없이 서버에서 직접 빌드).
+#
+# 필요한 GitHub Secrets(설정 방법은 docs/lecture/CICD-GITHUB-ACTIONS.md 참고):
+#   LIGHTSAIL_HOST, LIGHTSAIL_USER, LIGHTSAIL_SSH_KEY,
+#   KAKAO_REST_API, KAKAO_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+# ────────────────────────────────────────────────────────────────────────────
+name: Deploy to Lightsail
+
+# 언제 실행되나 — main 브랜치에 push될 때 자동 + Actions 탭에서 수동(workflow_dispatch)
+on:
+  push:
+    branches: ["main"]      # 다른 브랜치를 배포하려면 여기와 아래 deploy 스크립트의 origin/main 을 함께 변경
+  workflow_dispatch:        # 수동 트리거 버튼(코드 변경 없이 재배포할 때)
+
+# 동시에 여러 배포가 겹치지 않게 — 새 실행이 뜨면 진행 중인 이전 배포는 취소
+concurrency:
+  group: deploy-lightsail
+  cancel-in-progress: true
+
+jobs:
+  # ── 1) 빌드·테스트 게이트 ──────────────────────────────────────────────────
+  # 테스트가 깨지면 배포하지 않는다(H2로 돌아 외부 의존성 불필요). CI의 핵심.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 소스 체크아웃
+        uses: actions/checkout@v4
+
+      - name: JDK 21 설치(Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle           # gradle 의존성 캐시로 재실행 가속
+
+      - name: gradlew 실행권한 부여
+        run: chmod +x ./gradlew
+
+      - name: 테스트 실행(H2)
+        run: ./gradlew --no-daemon test
+
+  # ── 2) 배포 ────────────────────────────────────────────────────────────────
+  # test 잡 성공 후에만 실행(needs). Lightsail에 SSH로 접속해 최신 코드로 재기동한다.
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Lightsail SSH 접속 후 배포
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          # 접속 정보(Secrets). LIGHTSAIL_SSH_KEY 는 webserver_key.pem 전체 내용.
+          host: ${{ secrets.LIGHTSAIL_HOST }}
+          username: ${{ secrets.LIGHTSAIL_USER }}
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          # 앱 비밀값을 원격 셸 환경변수로 안전하게 전달(아래 script에서 .env로 씀)
+          envs: KAKAO_REST_API,KAKAO_SECRET,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET
+          # 원격 서버에서 실행할 명령들
+          script: |
+            set -euo pipefail                 # 오류 시 즉시 중단(안전)
+
+            cd ~/board                         # 최초 세팅에서 git clone 해 둔 위치(설치 가이드 참고)
+
+            echo "▶ 최신 코드 가져오기"
+            git fetch --all
+            git reset --hard origin/main       # 배포 브랜치. main 이외를 쓰면 이 줄을 변경
+
+            echo "▶ .env 생성(Secrets → 서버). 카카오 키는 fail-fast라 비면 기동 실패"
+            cat > .env <<EOF
+            KAKAO_REST_API=${KAKAO_REST_API}
+            KAKAO_SECRET=${KAKAO_SECRET}
+            GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+            GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+            EOF
+
+            echo "▶ 컨테이너 빌드·재기동(로컬과 동일한 docker compose)"
+            docker compose up -d --build
+
+            echo "▶ 사용 안 하는 옛 이미지 정리(디스크 확보)"
+            docker image prune -f
+
+            echo "▶ 상태 확인"
+            docker compose ps
+      # 주의: mysql-8 컨테이너와 board-db-net 네트워크는 이 워크플로가 만들지 않는다.
+      #       서버 최초 1회 세팅(설치 가이드)에서 준비해 두어야 한다.
