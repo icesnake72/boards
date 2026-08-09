@@ -135,47 +135,39 @@ jobs:
             echo "▶ 컨테이너 빌드·재기동(로컬과 동일한 docker compose)"
             docker compose up -d --build
 
-            echo "▶ 기본 게시판 시드(utf8mb4 · 깨진 데모 자동 교정 · 멱등)"
-            # 핵심: --default-character-set=utf8mb4 로 접속해야 한글이 안 깨진다.
-            # @garbled: boards가 있는데 정상 이름('자유게시판')이 없으면 = 이전에 깨져 저장된 상태.
-            #   그 경우 글 없는(데모) 게시판만 지우고 재시드한다(글 달린 게시판은 보존, 정상 상태면 무동작).
-            docker exec mysql-8 mysql --default-character-set=utf8mb4 -uroot -p"${DB_PASSWORD}" "${DB_NAME}" -e "
-              SET NAMES utf8mb4;
-              SET @garbled := (SELECT CASE WHEN COUNT(*)>0 AND SUM(name='자유게시판')=0 THEN 1 ELSE 0 END FROM boards);
-              DELETE b FROM boards b LEFT JOIN posts p ON p.board_id=b.id WHERE p.id IS NULL AND @garbled=1;
-              INSERT INTO boards (name, description, created_at, updated_at)
-              SELECT name, description, NOW(), NOW() FROM (
-                SELECT '자유게시판' AS name, '아무 이야기나 나누는 공간' AS description
-                UNION ALL SELECT '공지사항', '관리자 공지'
-                UNION ALL SELECT 'Q&A', '질문과 답변'
-              ) AS seed
-              WHERE NOT EXISTS (SELECT 1 FROM boards);
-            " && echo "  시드/교정 OK" || echo "  시드 실패"
-            echo "  현재 게시판 목록(한글 정상 표시되어야):"
-            docker exec mysql-8 mysql --default-character-set=utf8mb4 -uroot -p"${DB_PASSWORD}" "${DB_NAME}" -N -e "SELECT CONCAT('    #',id,' ',name,' — ',IFNULL(description,'')) FROM boards ORDER BY id;" 2>/dev/null || echo "    (조회 실패)"
-
             echo "▶ 사용 안 하는 옛 이미지 정리(디스크 확보)"
             docker image prune -f
 
             echo "▶ 상태 확인"
             docker compose ps
 
-            echo "▶ 검증: 프론트(80) 준비 대기"
-            for i in $(seq 1 30); do
-              code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1/ || echo 000)
-              [ "$code" = "200" ] && { echo "  frontend(80) → 200 ready"; break; }
-              sleep 2
-            done
-
-            echo "▶ 검증: 외부 노출 여부(백엔드·DB는 publish 없어야 비공개)"
-            apppub=$(docker port board-app 2>/dev/null || true)
-            dbpub=$(docker port mysql-8 2>/dev/null || true)
-            echo "  board-app publish: ${apppub:-없음(비공개 OK)}"
-            echo "  mysql-8  publish: ${dbpub:-없음(비공개 OK)}"
-
-            echo "▶ 검증: OAuth 개시(프론트80 프록시 경유, Host=3.34.173.34) — 302 + redirect_uri 확인"
-            for p in kakao google; do
-              echo "  [$p]"
-              curl -s -o /dev/null -D - -H "Host: 3.34.173.34" "http://127.0.0.1/oauth2/authorization/$p" \
-                | tr -d '\r' | grep -iE "^HTTP/|^location:" | sed 's/^/    /' || true
-            done
+            echo "▶ 검증: DB · 백엔드 · 프론트가 정상(healthy)인지만 확인"
+            # 앱 컨테이너 3종(board-app/board-frontend/board-frontend-react)은 compose healthcheck의
+            # Health.Status 를 본다. mysql-8 은 별도 헬스체크가 없으므로 실제 ping 응답으로 확인한다.
+            wait_healthy() {
+              svc="$1"
+              for i in $(seq 1 30); do
+                st=$(docker inspect --format '{{.State.Health.Status}}' "$svc" 2>/dev/null || echo missing)
+                [ "$st" = "healthy" ] && { echo "  $svc: healthy ✓"; return 0; }
+                sleep 2
+              done
+              echo "  $svc: NOT healthy (last=$st) ✗"; return 1
+            }
+            db_ok() {
+              for i in $(seq 1 30); do
+                docker exec mysql-8 mysqladmin ping -h127.0.0.1 -uroot -p"${DB_PASSWORD}" --silent >/dev/null 2>&1 \
+                  && { echo "  mysql-8: DB 응답 OK ✓"; return 0; }
+                sleep 2
+              done
+              echo "  mysql-8: DB 응답 없음 ✗"; return 1
+            }
+            rc=0
+            db_ok || rc=1
+            wait_healthy board-app || rc=1
+            wait_healthy board-frontend || rc=1
+            wait_healthy board-frontend-react || rc=1
+            if [ "$rc" -eq 0 ]; then
+              echo "▶ DB·백엔드·프론트 모두 정상"
+            else
+              echo "▶ 일부 서비스 비정상 — 배포 실패 처리"; exit 1
+            fi
