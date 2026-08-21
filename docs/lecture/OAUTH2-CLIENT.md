@@ -182,6 +182,9 @@ TokenPair tokens = authService.issueTokenPair(user);   // 단계 4~5 발급 경�
 
 커스텀 principal 클래스를 만드는 대신 `getName()`(=providerId)으로 재조회한다 — 쿼리 한 번을 더 쓰고 클래스 수를 줄이는 선택(학습 난이도 우선). registrationId("kakao")로 `AuthProvider`를 결정하므로 네이버/구글이 추가돼도 이 핸들러는 그대로다.
 
+> [!NOTE]
+> **이후 변경**: React SPA 도입 때 이 핸들러의 응답이 **JSON 대신 refresh 쿠키만 심고 `/`로 리다이렉트**하는 방식으로 바뀌었다 — 소셜 로그인은 전체 리다이렉트 흐름이라 JSON을 주면 브라우저에 날 JSON이 떠 SPA가 토큰을 받을 수 없기 때문(SPA는 로드 시 silent login이 쿠키로 세션을 복원). 위 스니펫은 단계 8 시점 그대로이며, 현재 코드에는 구 JSON 응답이 "SPA 전환 처리에 의해 제거" 주석으로 보존돼 있다. 배포 관점은 [[DEPLOY-LIGHTSAIL]] 참고.
+
 ### 5-4. `OAuth2LoginFailureHandler` — 실패를 401 JSON으로
 
 기본 동작은 `/login?error` **리다이렉트** — 화면 없는 REST API에 맞지 않는다. 동의 거부·state 불일치·토큰 교환 실패 모두 `OAUTH_LOGIN_FAILED`(401) 한 코드로 응답하고 세부 사유는 로그로만 남긴다(단계 7과 같은 정책).

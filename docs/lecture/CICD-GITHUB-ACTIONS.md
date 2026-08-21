@@ -9,7 +9,7 @@ status: 완료
 # GitHub Actions CI/CD — 파이프라인 요약 + Secret 설정
 
 - **대상 파일**: `.github/workflows/deploy.yml`
-- **한 줄 요약**: `main`에 push하면 → **테스트 통과 시** → Lightsail에 SSH로 접속해 **`git pull` + `docker compose up --build`** 로 자동 재배포한다.
+- **한 줄 요약**: `main`에 push하면 → **테스트 통과 시** → Lightsail에 SSH로 접속해 **`git pull` + 직렬 빌드 + `docker compose up --wait`** 로 자동 재배포한다.
 - **선행 세팅**: 서버 준비는 [[DEPLOY-LIGHTSAIL]], 컨테이너 구조는 [[DOCKER]].
 
 ---
@@ -25,7 +25,9 @@ flowchart TD
   PULL --> SH["scripts/deploy.sh 실행"]
   SH --> ENV[".env 생성 (Secrets → 서버)"]
   ENV --> DB["board-db-net·mysql-8 준비 + DB 응답 대기"]
-  DB --> UP["docker compose up -d --build --wait (healthy까지 대기, 실패 시 배포 실패)"]
+  DB --> SWAP["스왑 2G 보장 (OOM 방어)"]
+  SWAP --> BUILD["직렬 빌드 (app 다음 frontend들)"]
+  BUILD --> UP["docker compose up -d --wait (healthy까지 대기)"]
   UP --> PRUNE["docker image prune -f"]
 ```
 
@@ -46,9 +48,10 @@ flowchart TD
 | `concurrency` | 겹치는 배포 취소 | 동시 배포 충돌 방지 |
 | `job: test` | `checkout@v5` + `setup-java@v5`(JDK 21) + `./gradlew test` | 배포 전 품질 게이트(H2, 외부 의존 없음) |
 | `job: deploy` (`needs: test`) | `appleboy/ssh-action`으로 SSH 배포 | test 성공 후에만 실행 |
+| `command_timeout: 30m` | 원격 스크립트 최대 실행 시간 상향 | 기본 10m은 서버 빌드보다 짧아 "Run Command Timeout"으로 배포가 중단됐다 |
 | `envs:` | 앱 비밀값을 원격 셸로 전달 | 로그 노출 없이 `.env` 생성 |
 | `script:` | 코드 최신화(clone/`reset --hard origin/main`) 후 **`scripts/deploy.sh` 실행** — 5줄 | 워크플로는 접속만, 배포 로직은 셸 파일에 |
-| `scripts/deploy.sh` | `.env` 작성 → `board-db-net`·`mysql-8` 준비 + DB 응답 대기 → `compose up -d --build --wait` → `prune` | 실제 재배포 로직(저장소에 버전관리·주석 포함) |
+| `scripts/deploy.sh` | `.env` 작성 → `board-db-net`·`mysql-8` 준비 + DB 응답 대기 → **스왑 보장 → 직렬 빌드(app→프론트) → `up -d --wait`** → `prune` | 실제 재배포 로직(저장소에 버전관리·주석 포함) |
 | `--wait` (compose) | healthcheck 있는 서비스 3종이 **healthy가 될 때까지 대기**, 실패 시 exit≠0 → 배포 실패 | 별도 검증 루프 없이 DB·백엔드·프론트 정상 여부를 compose가 판정 |
 
 > [!NOTE]
@@ -162,3 +165,5 @@ gh secret list        # 이름과 갱신 시각만 보인다(값은 다시 볼 �
 | 앱 기동 실패(카카오 IllegalState) | `KAKAO_*` Secret 누락·오타 → `.env`가 빈 값으로 생성됨 |
 | test 잡 실패로 배포 안 됨 | 테스트가 실제로 깨진 것 → 로컬 `./gradlew test`로 재현·수정 |
 | 접속은 되나 80 응답 없음 | Lightsail 방화벽에 80 미개방([[DEPLOY-LIGHTSAIL]] §2) |
+| `Run Command Timeout`으로 deploy 중단 | 서버 빌드가 `command_timeout`(30m) 초과 — 매우 드묾. 인스턴스 성능 확인 |
+| 배포 중 서버 전체 무응답(80·22 모두) | 빌드 메모리 고갈 — deploy.sh가 스왑 2G·직렬 빌드로 방어하지만, 그래도 멈추면 Lightsail 콘솔(또는 `aws lightsail reboot-instance`)로 재부팅 후 재배포 |

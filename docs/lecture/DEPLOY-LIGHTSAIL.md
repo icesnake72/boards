@@ -160,7 +160,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/api/v1/boards  # /api 
 서버 세팅이 끝났으면, 코드가 바뀔 때마다 손으로 할 필요가 없다. **GitHub Secrets를 등록**하고 `main`에 push하면 [[CICD-GITHUB-ACTIONS]]의 워크플로(`.github/workflows/deploy.yml`)가:
 
 1. 테스트 실행(H2)
-2. Lightsail에 SSH 접속 → (없으면) board-db-net·mysql-8·저장소 자동 생성 → `.env` 재생성 → mysql-8 준비 대기 → `docker compose up -d --build`
+2. Lightsail에 SSH 접속 → (없으면) board-db-net·mysql-8·저장소 자동 생성 → `.env` 재생성 → mysql-8 준비 대기 → 스왑 2G 보장 → 직렬 빌드(app → 프론트 2종) → `docker compose up -d --wait`
 3. **기본 게시판 시드(utf8mb4)**: 게시판이 하나도 없으면 `자유게시판`·`공지사항`·`Q&A`를 자동 생성한다(멱등 — 이미 있으면 무동작, 한글이 깨져 저장된 데모는 자동 교정).
 4. **배포 후 검증**: 프론트(80) 200 대기, 백엔드·DB가 host에 publish되지 않은 비공개 상태인지 확인, OAuth 개시(카카오·구글)가 302 + 올바른 `redirect_uri`를 돌려주는지 확인.
 
@@ -172,9 +172,11 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/api/v1/boards  # /api 
 
 백엔드가 비공개(host publish 없음)라, 소셜 로그인 흐름은 **공개 프론트(React, 80)의 Nginx가 중계**한다. 순수 JS 프론트(8070)의 Nginx도 같은 oauth 프록시 구성을 갖는다.
 
-- **프론트(80) Nginx가 `/oauth2/`·`/login/oauth2/`를 프록시**한다. 브라우저는 `http://3.34.173.34/oauth2/authorization/{kakao|google}` 로 로그인을 개시하고, Nginx가 이를 `board-app:8090`으로 넘긴다.
+- **프론트(80) Nginx가 `/oauth2/`·`/login/oauth2/`를 프록시**한다. 브라우저는 `http://3.34.173.34/oauth2/authorization/{kakao|google}` 로 로그인을 개시하고, Nginx가 이를 `board-app:8090`으로 넘긴다. **React 메인(80)의 로그인 화면에 카카오·구글 브랜드 버튼**이 있어 클릭 한 번으로 이 주소로 이동한다.
 - 프론트 Nginx는 `X-Forwarded-Host`/`X-Forwarded-Proto`를 전달하고, 백엔드 `application.yaml`의 `server.forward-headers-strategy: framework`가 이를 반영해 `redirect_uri`를 내부 `board-app:8090`이 아니라 실제 공개 주소 `http://3.34.173.34/login/oauth2/code/*` 로 계산한다.
+- **성공 처리(SPA 방식)**: 성공 핸들러(`OAuth2LoginSuccessHandler`)가 **refresh 쿠키(httpOnly)만 심고 `/`로 리다이렉트**한다 — 소셜 로그인은 전체 리다이렉트 흐름이라 JSON을 응답하면 브라우저에 날 JSON이 그대로 뜨기 때문. SPA는 로드 시 silent login(reissue)이 이 쿠키로 세션을 복원하므로, **access token이 URL·응답 본문에 노출되지 않는다**. 실패는 `/?error=OAUTH_LOGIN_FAILED`로 리다이렉트되고 SPA가 쿼리를 읽어 메시지를 표시한 뒤 URL을 정리한다.
 - **카카오/구글 콘솔에 Redirect URI 등록 필수**: `http://3.34.173.34/login/oauth2/code/kakao`, `http://3.34.173.34/login/oauth2/code/google`.
+- **카카오는 실로그인 E2E로 검증 완료** — 콘솔에 로컬(localhost)·production(3.34.173.34) redirect URI를 모두 등록해 두 환경에서 로그인 → 쿠키 → silent login까지 완주함을 확인했다.
 
 > [!WARNING]
 > **구글은 `http` 공개주소를 redirect_uri로 거부한다(HTTPS 필수).** 따라서 현재 http-only 구성에서 구글 로그인은 콘솔에서 막히고, 실제로 쓰려면 도메인 + HTTPS(TLS)로 전환해야 한다. **카카오는 http redirect_uri를 허용**하므로 현재 구성에서 동작한다. 운영 전환 시 80→443(HTTPS)으로 올리고 두 콘솔의 Redirect URI도 `https://.../login/oauth2/code/*` 로 갱신한다.
@@ -192,4 +194,4 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/api/v1/boards  # /api 
 | 앱이 DB 연결 실패(Communications link) | mysql-8 미기동 또는 board-db-net 미연결(§5) |
 | 구글 로그인이 콘솔에서 거부됨 | 구글은 http redirect_uri 불가 → HTTPS 전환 필요(§10). 카카오는 http 허용 |
 | 소셜 로그인 후 redirect_uri 불일치 | 카카오/구글 콘솔의 Redirect URI를 `http://3.34.173.34/login/oauth2/code/*` 로 등록(§10) |
-| 빌드 중 OOM/멈춤 | 인스턴스 메모리 부족(gradle+npm 동시 빌드) → 2GB 이상 플랜 권장 |
+| 빌드 중 OOM/멈춤 | 2GB 인스턴스에서 gradle+npm 병렬 빌드로 실제 발생했던 사고 — 이제 `deploy.sh`가 **스왑 2G 보장 + 직렬 빌드**로 방어한다. 그래도 인스턴스가 멈추면(80·22 모두 무응답) Lightsail 콘솔 또는 `aws lightsail reboot-instance`로 재부팅 후 재배포(실제 복구 사례) |

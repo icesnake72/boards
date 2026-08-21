@@ -188,6 +188,9 @@ docker compose ps                   # 상태 확인
 
 같은 화면(게시판 목록)을 React로도 구현해 나란히 배포한다. **배포 방식(Nginx 리버스 프록시)과 API 연동은 완전히 동일**하고, 차이는 딱 하나 — **React는 빌드 단계가 필요**하다는 점이다. 그래서 Dockerfile이 멀티스테이지가 된다.
 
+> [!NOTE]
+> 이 절의 "게시판 목록만"은 **배포 실습 시점** 기준이다. 이후 React 프론트(`frontend-react/`)는 **로그인/회원가입/로그아웃(access token은 메모리, refresh는 httpOnly 쿠키, 401 시 자동 재발급), 글 작성(multipart)·상세, 댓글/대댓글, 반응(좋아요/싫어요), 소셜 로그인 버튼(카카오·구글)** 까지 갖춘 백엔드 테스트 SPA로 확장됐다. 배포 아키텍처(멀티스테이지 빌드 + Nginx 프록시)는 그대로다 — 소셜 로그인 처리 방식은 [[DEPLOY-LIGHTSAIL]] §10 참고.
+
 ```mermaid
 flowchart LR
   subgraph BUILD["빌드 단계 (node:20-alpine)"]
