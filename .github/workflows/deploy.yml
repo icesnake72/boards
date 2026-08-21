@@ -2,25 +2,23 @@
 # GitHub Actions CI/CD — AWS Lightsail 배포
 #
 # 흐름: (1) test 잡에서 빌드·테스트(H2) 통과 확인 → (2) deploy 잡에서 Lightsail에
-#       SSH 접속 → git pull → docker compose 재기동. "로컬에서 하던 방식 그대로"를
-#       원격 서버에서 자동 실행한다(별도 이미지 레지스트리 없이 서버에서 직접 빌드).
+#       SSH 접속 → 코드 최신화 → scripts/deploy.sh 실행.
+#       실제 배포 로직(.env 생성, DB 준비, compose up --wait)은 저장소의
+#       scripts/deploy.sh 에 있다 — 워크플로는 "언제·어디서" 만, 스크립트는 "무엇을" 담당.
 #
-# 전제: 서버에 Docker/Compose가 이미 설치돼 있어야 한다(이 워크플로는 Docker를 설치하지 않는다).
-#       board-db-net 네트워크와 mysql-8 컨테이너, 저장소 클론은 아래 스크립트가
-#       "없으면 자동 생성"하므로, docker만 깔려 있으면 첫 배포부터 동작한다.
+# 전제: 서버에 Docker/Compose가 설치돼 있어야 한다(그 외 네트워크·mysql-8·클론은 자동).
 #
 # 필요한 GitHub Secrets(설정 방법은 docs/lecture/CICD-GITHUB-ACTIONS.md 참고):
 #   LIGHTSAIL_HOST, LIGHTSAIL_USER, LIGHTSAIL_SSH_KEY,
 #   KAKAO_REST_API, KAKAO_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
 #   DB_NAME, DB_USERNAME, DB_PASSWORD
-#   (DB_HOST/DB_PORT/APP_UPLOAD_DIR 는 compose가 서버용 값으로 강제 주입하므로 미사용)
 # ────────────────────────────────────────────────────────────────────────────
 name: Deploy to Lightsail
 
 # 언제 실행되나 — main 브랜치에 push될 때 자동 + Actions 탭에서 수동(workflow_dispatch)
 on:
   push:
-    branches: ["main"]      # 다른 브랜치를 배포하려면 여기와 아래 deploy 스크립트의 origin/main 을 함께 변경
+    branches: ["main"]      # 다른 브랜치를 배포하려면 여기와 아래 origin/main 을 함께 변경
     paths-ignore:           # 문서만 바뀐 커밋은 재배포하지 않는다(서버 재빌드 낭비 방지)
       - "docs/**"
       - "**/*.md"
@@ -32,8 +30,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── 1) 빌드·테스트 게이트 ──────────────────────────────────────────────────
-  # 테스트가 깨지면 배포하지 않는다(H2로 돌아 외부 의존성 불필요). CI의 핵심.
+  # ── 1) 빌드·테스트 게이트 — 테스트가 깨지면 배포하지 않는다(H2라 외부 의존 없음) ──
   test:
     runs-on: ubuntu-latest
     steps:
@@ -47,23 +44,17 @@ jobs:
           java-version: "21"
           cache: gradle           # gradle 의존성 캐시로 재실행 가속
 
-      - name: gradlew 실행권한 부여
-        run: chmod +x ./gradlew
-
       - name: 테스트 실행(H2)
-        run: ./gradlew --no-daemon test
+        run: chmod +x ./gradlew && ./gradlew --no-daemon test
 
-  # ── 2) 배포 ────────────────────────────────────────────────────────────────
-  # test 잡 성공 후에만 실행(needs). Lightsail에 SSH로 접속해 최신 코드로 재기동한다.
+  # ── 2) 배포 — test 성공 후에만(needs). 서버에서 scripts/deploy.sh 가 일한다 ──
   deploy:
     needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Lightsail SSH 접속 후 배포
         uses: appleboy/ssh-action@v1.2.0
-        # Secrets를 먼저 러너 환경변수로 노출해야 아래 envs:가 원격으로 전달할 수 있다.
-        # (envs:는 "이미 존재하는 env 이름"을 원격에 넘기는 것이므로, 이 블록이 없으면
-        #  원격에서 unbound variable 로 실패한다.)
+        # Secrets를 러너 env로 먼저 노출해야 envs:가 원격 셸로 전달할 수 있다.
         env:
           KAKAO_REST_API: ${{ secrets.KAKAO_REST_API }}
           KAKAO_SECRET: ${{ secrets.KAKAO_SECRET }}
@@ -73,101 +64,14 @@ jobs:
           DB_USERNAME: ${{ secrets.DB_USERNAME }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         with:
-          # 접속 정보(Secrets). LIGHTSAIL_SSH_KEY 는 webserver_key.pem 전체 내용.
           host: ${{ secrets.LIGHTSAIL_HOST }}
           username: ${{ secrets.LIGHTSAIL_USER }}
-          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
-          # 위 env: 로 노출된 값을 원격 셸 환경변수로 전달(script에서 .env·mysql-8에 사용)
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}          # webserver_key.pem 전체 내용
           envs: KAKAO_REST_API,KAKAO_SECRET,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,DB_NAME,DB_USERNAME,DB_PASSWORD
-          # 원격 서버에서 실행할 명령들
+          # 원격에서 할 일: 코드 최신화 → 배포 스크립트 실행 (로직은 scripts/deploy.sh 참고)
           script: |
-            set -euo pipefail
-
-            REPO_DIR="$HOME/board"
-            REPO_URL="https://github.com/icesnake72/boards.git"
-
-            echo "▶ 저장소 준비(없으면 clone, 있으면 최신화)"
-            if [ ! -d "$REPO_DIR/.git" ]; then
-              git clone "$REPO_URL" "$REPO_DIR"
-            fi
-            cd "$REPO_DIR"
-            git fetch --all
-            git reset --hard origin/main       # 배포 브랜치. main 이외를 쓰면 이 줄을 변경
-
-            echo "▶ .env 생성(Secrets → 서버). 카카오 키는 fail-fast라 비면 기동 실패"
-            # DB_HOST/DB_PORT/APP_UPLOAD_DIR 는 compose가 서버용 값으로 강제하므로 여기서 쓰지 않는다.
-            cat > .env <<EOF
-            KAKAO_REST_API=${KAKAO_REST_API}
-            KAKAO_SECRET=${KAKAO_SECRET}
-            GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-            GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-            DB_NAME=${DB_NAME}
-            DB_USERNAME=${DB_USERNAME}
-            DB_PASSWORD=${DB_PASSWORD}
-            EOF
-
-            echo "▶ 전용 네트워크 준비(없으면 생성)"
-            docker network create board-db-net 2>/dev/null || true
-
-            echo "▶ mysql-8 준비(없으면 기동, 있으면 그대로 사용)"
-            if [ -n "$(docker ps -aq -f name=^mysql-8$)" ]; then
-              # 컨테이너는 있는데 멈춰 있으면 시작
-              [ -z "$(docker ps -q -f name=^mysql-8$)" ] && docker start mysql-8 || true
-            else
-              docker run -d --name mysql-8 \
-                --network board-db-net \
-                -e MYSQL_ROOT_PASSWORD="${DB_PASSWORD}" \
-                -e MYSQL_DATABASE="${DB_NAME}" \
-                -v mysql8-data:/var/lib/mysql \
-                mysql:8.0.33 --default-time-zone=+09:00
-            fi
-            # mysql-8 이 board-db-net 에 연결돼 있도록 보장(이미 연결돼 있으면 무시)
-            docker network connect board-db-net mysql-8 2>/dev/null || true
-
-            echo "▶ mysql-8 준비 대기(최대 ~60s)"
-            for i in $(seq 1 30); do
-              if docker exec mysql-8 mysqladmin ping -h127.0.0.1 -uroot -p"${DB_PASSWORD}" --silent >/dev/null 2>&1; then
-                echo "  mysql-8 ready"; break
-              fi
-              sleep 2
-            done
-
-            echo "▶ 컨테이너 빌드·재기동(로컬과 동일한 docker compose)"
-            docker compose up -d --build
-
-            echo "▶ 사용 안 하는 옛 이미지 정리(디스크 확보)"
-            docker image prune -f
-
-            echo "▶ 상태 확인"
-            docker compose ps
-
-            echo "▶ 검증: DB · 백엔드 · 프론트가 정상(healthy)인지만 확인"
-            # 앱 컨테이너 3종(board-app/board-frontend/board-frontend-react)은 compose healthcheck의
-            # Health.Status 를 본다. mysql-8 은 별도 헬스체크가 없으므로 실제 ping 응답으로 확인한다.
-            wait_healthy() {
-              svc="$1"
-              for i in $(seq 1 30); do
-                st=$(docker inspect --format '{{.State.Health.Status}}' "$svc" 2>/dev/null || echo missing)
-                [ "$st" = "healthy" ] && { echo "  $svc: healthy ✓"; return 0; }
-                sleep 2
-              done
-              echo "  $svc: NOT healthy (last=$st) ✗"; return 1
-            }
-            db_ok() {
-              for i in $(seq 1 30); do
-                docker exec mysql-8 mysqladmin ping -h127.0.0.1 -uroot -p"${DB_PASSWORD}" --silent >/dev/null 2>&1 \
-                  && { echo "  mysql-8: DB 응답 OK ✓"; return 0; }
-                sleep 2
-              done
-              echo "  mysql-8: DB 응답 없음 ✗"; return 1
-            }
-            rc=0
-            db_ok || rc=1
-            wait_healthy board-app || rc=1
-            wait_healthy board-frontend || rc=1
-            wait_healthy board-frontend-react || rc=1
-            if [ "$rc" -eq 0 ]; then
-              echo "▶ DB·백엔드·프론트 모두 정상"
-            else
-              echo "▶ 일부 서비스 비정상 — 배포 실패 처리"; exit 1
-            fi
+            set -e
+            [ -d ~/board/.git ] || git clone https://github.com/icesnake72/boards.git ~/board
+            cd ~/board
+            git fetch --all && git reset --hard origin/main
+            ./scripts/deploy.sh
