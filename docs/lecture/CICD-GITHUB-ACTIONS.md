@@ -21,11 +21,16 @@ flowchart TD
   PUSH["git push origin main"] --> TEST["job: test — ./gradlew test (H2)"]
   TEST -->|"실패"| STOP["배포 중단"]
   TEST -->|"성공"| DEPLOY["job: deploy — SSH into Lightsail"]
-  DEPLOY --> PULL["git pull (origin/main)"]
-  PULL --> ENV[".env 생성 (Secrets → 서버)"]
-  ENV --> UP["docker compose up -d --build"]
+  DEPLOY --> PULL["코드 최신화 (없으면 clone, git reset --hard origin/main)"]
+  PULL --> SH["scripts/deploy.sh 실행"]
+  SH --> ENV[".env 생성 (Secrets → 서버)"]
+  ENV --> DB["board-db-net·mysql-8 준비 + DB 응답 대기"]
+  DB --> UP["docker compose up -d --build --wait (healthy까지 대기, 실패 시 배포 실패)"]
   UP --> PRUNE["docker image prune -f"]
 ```
+
+> [!NOTE]
+> 워크플로(yml)는 "**언제·어디서**"(트리거·SSH 접속)만 담당하고, "**무엇을**"(배포 로직)은 저장소의 `scripts/deploy.sh` 가 담당한다. 로직이 셸 파일로 분리돼 있어 읽기 쉽고, 서버에서 직접 실행해 디버깅할 수도 있다.
 
 - **두 잡(job)으로 나뉜다**: `test` → `deploy`. `deploy`는 `needs: test`라 **테스트가 깨지면 배포되지 않는다**(CI 게이트).
 - **레지스트리 없이 서버에서 직접 빌드**한다 — "로컬 방식 그대로"를 원격에서 실행하는 구조.
@@ -39,13 +44,15 @@ flowchart TD
 | `on.push.branches: [main]` | main push 시 자동 실행 | 배포 트리거 |
 | `on.workflow_dispatch` | Actions 탭에서 수동 실행 | 코드 변경 없이 재배포 |
 | `concurrency` | 겹치는 배포 취소 | 동시 배포 충돌 방지 |
-| `job: test` | JDK 21 + `./gradlew test` | 배포 전 품질 게이트(H2, 외부 의존 없음) |
+| `job: test` | `checkout@v5` + `setup-java@v5`(JDK 21) + `./gradlew test` | 배포 전 품질 게이트(H2, 외부 의존 없음) |
 | `job: deploy` (`needs: test`) | `appleboy/ssh-action`으로 SSH 배포 | test 성공 후에만 실행 |
 | `envs:` | 앱 비밀값을 원격 셸로 전달 | 로그 노출 없이 `.env` 생성 |
-| `script:` | `git reset --hard origin/main` → `.env` 작성 → `compose up --build` → `prune` | 실제 재배포 로직 |
+| `script:` | 코드 최신화(clone/`reset --hard origin/main`) 후 **`scripts/deploy.sh` 실행** — 5줄 | 워크플로는 접속만, 배포 로직은 셸 파일에 |
+| `scripts/deploy.sh` | `.env` 작성 → `board-db-net`·`mysql-8` 준비 + DB 응답 대기 → `compose up -d --build --wait` → `prune` | 실제 재배포 로직(저장소에 버전관리·주석 포함) |
+| `--wait` (compose) | healthcheck 있는 서비스 3종이 **healthy가 될 때까지 대기**, 실패 시 exit≠0 → 배포 실패 | 별도 검증 루프 없이 DB·백엔드·프론트 정상 여부를 compose가 판정 |
 
 > [!NOTE]
-> `mysql-8` 컨테이너와 `board-db-net` 네트워크는 이 워크플로가 만들지 않는다. 서버 최초 세팅([[DEPLOY-LIGHTSAIL]] §5)에서 준비돼 있어야 한다. 파이프라인은 "앱·프론트의 재배포"만 담당한다.
+> `board-db-net` 네트워크·`mysql-8` 컨테이너·저장소 클론은 **없으면 이 워크플로가 자동 생성**한다(있으면 그대로 사용). 유일하게 자동화하지 않는 전제는 **Docker 설치**뿐이다([[DEPLOY-LIGHTSAIL]] §4). 즉 Docker만 깔려 있으면 첫 push부터 배포가 완결된다.
 
 ---
 
@@ -139,7 +146,7 @@ gh secret list        # 이름과 갱신 시각만 보인다(값은 다시 볼 �
 2. 서버 준비 완료([[DEPLOY-LIGHTSAIL]] §1~§8)
 3. `main`에 push(또는 Actions 탭에서 **Run workflow** 수동 실행)
 4. 저장소 **Actions** 탭에서 `test → deploy` 진행 로그 확인
-5. 성공 후 브라우저: `http://3.34.173.34:8070`, `http://3.34.173.34:8071`
+5. 성공 후 브라우저: `http://3.34.173.34` (80 — 포트 생략), `http://3.34.173.34:8071`
 
 > [!TIP]
 > 현재 작업은 `step13-reactions` 브랜치에 있다. 파이프라인은 `main` 기준이므로, 배포하려면 **main에 머지**하거나 `deploy.yml`의 트리거 브랜치와 스크립트의 `origin/main` 을 해당 브랜치로 바꾼다.
@@ -154,4 +161,4 @@ gh secret list        # 이름과 갱신 시각만 보인다(값은 다시 볼 �
 | deploy 스크립트 `permission denied ... docker.sock` | 서버에서 `usermod -aG docker` 미적용([[DEPLOY-LIGHTSAIL]] §4) |
 | 앱 기동 실패(카카오 IllegalState) | `KAKAO_*` Secret 누락·오타 → `.env`가 빈 값으로 생성됨 |
 | test 잡 실패로 배포 안 됨 | 테스트가 실제로 깨진 것 → 로컬 `./gradlew test`로 재현·수정 |
-| 접속은 되나 8070/8071 응답 없음 | Lightsail 방화벽 포트 미개방([[DEPLOY-LIGHTSAIL]] §2) |
+| 접속은 되나 80/8071 응답 없음 | Lightsail 방화벽에 80·8071 미개방([[DEPLOY-LIGHTSAIL]] §2) |

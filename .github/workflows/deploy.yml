@@ -2,25 +2,26 @@
 # GitHub Actions CI/CD — AWS Lightsail 배포
 #
 # 흐름: (1) test 잡에서 빌드·테스트(H2) 통과 확인 → (2) deploy 잡에서 Lightsail에
-#       SSH 접속 → git pull → docker compose 재기동. "로컬에서 하던 방식 그대로"를
-#       원격 서버에서 자동 실행한다(별도 이미지 레지스트리 없이 서버에서 직접 빌드).
+#       SSH 접속 → 코드 최신화 → scripts/deploy.sh 실행.
+#       실제 배포 로직(.env 생성, DB 준비, compose up --wait)은 저장소의
+#       scripts/deploy.sh 에 있다 — 워크플로는 "언제·어디서" 만, 스크립트는 "무엇을" 담당.
 #
-# 전제: 서버에 Docker/Compose가 이미 설치돼 있어야 한다(이 워크플로는 Docker를 설치하지 않는다).
-#       board-db-net 네트워크와 mysql-8 컨테이너, 저장소 클론은 아래 스크립트가
-#       "없으면 자동 생성"하므로, docker만 깔려 있으면 첫 배포부터 동작한다.
+# 전제: 서버에 Docker/Compose가 설치돼 있어야 한다(그 외 네트워크·mysql-8·클론은 자동).
 #
 # 필요한 GitHub Secrets(설정 방법은 docs/lecture/CICD-GITHUB-ACTIONS.md 참고):
 #   LIGHTSAIL_HOST, LIGHTSAIL_USER, LIGHTSAIL_SSH_KEY,
 #   KAKAO_REST_API, KAKAO_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
 #   DB_NAME, DB_USERNAME, DB_PASSWORD
-#   (DB_HOST/DB_PORT/APP_UPLOAD_DIR 는 compose가 서버용 값으로 강제 주입하므로 미사용)
 # ────────────────────────────────────────────────────────────────────────────
 name: Deploy to Lightsail
 
 # 언제 실행되나 — main 브랜치에 push될 때 자동 + Actions 탭에서 수동(workflow_dispatch)
 on:
   push:
-    branches: ["main"]      # 다른 브랜치를 배포하려면 여기와 아래 deploy 스크립트의 origin/main 을 함께 변경
+    branches: ["main"]      # 다른 브랜치를 배포하려면 여기와 아래 origin/main 을 함께 변경
+    paths-ignore:           # 문서만 바뀐 커밋은 재배포하지 않는다(서버 재빌드 낭비 방지)
+      - "docs/**"
+      - "**/*.md"
   workflow_dispatch:        # 수동 트리거 버튼(코드 변경 없이 재배포할 때)
 
 # 동시에 여러 배포가 겹치지 않게 — 새 실행이 뜨면 진행 중인 이전 배포는 취소
@@ -29,38 +30,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── 1) 빌드·테스트 게이트 ──────────────────────────────────────────────────
-  # 테스트가 깨지면 배포하지 않는다(H2로 돌아 외부 의존성 불필요). CI의 핵심.
+  # ── 1) 빌드·테스트 게이트 — 테스트가 깨지면 배포하지 않는다(H2라 외부 의존 없음) ──
   test:
     runs-on: ubuntu-latest
     steps:
       - name: 소스 체크아웃
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: JDK 21 설치(Temurin)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
           cache: gradle           # gradle 의존성 캐시로 재실행 가속
 
-      - name: gradlew 실행권한 부여
-        run: chmod +x ./gradlew
-
       - name: 테스트 실행(H2)
-        run: ./gradlew --no-daemon test
+        run: chmod +x ./gradlew && ./gradlew --no-daemon test
 
-  # ── 2) 배포 ────────────────────────────────────────────────────────────────
-  # test 잡 성공 후에만 실행(needs). Lightsail에 SSH로 접속해 최신 코드로 재기동한다.
+  # ── 2) 배포 — test 성공 후에만(needs). 서버에서 scripts/deploy.sh 가 일한다 ──
   deploy:
     needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Lightsail SSH 접속 후 배포
         uses: appleboy/ssh-action@v1.2.0
-        # Secrets를 먼저 러너 환경변수로 노출해야 아래 envs:가 원격으로 전달할 수 있다.
-        # (envs:는 "이미 존재하는 env 이름"을 원격에 넘기는 것이므로, 이 블록이 없으면
-        #  원격에서 unbound variable 로 실패한다.)
+        # Secrets를 러너 env로 먼저 노출해야 envs:가 원격 셸로 전달할 수 있다.
         env:
           KAKAO_REST_API: ${{ secrets.KAKAO_REST_API }}
           KAKAO_SECRET: ${{ secrets.KAKAO_SECRET }}
@@ -70,109 +64,14 @@ jobs:
           DB_USERNAME: ${{ secrets.DB_USERNAME }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         with:
-          # 접속 정보(Secrets). LIGHTSAIL_SSH_KEY 는 webserver_key.pem 전체 내용.
           host: ${{ secrets.LIGHTSAIL_HOST }}
           username: ${{ secrets.LIGHTSAIL_USER }}
-          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
-          # 위 env: 로 노출된 값을 원격 셸 환경변수로 전달(script에서 .env·mysql-8에 사용)
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}          # webserver_key.pem 전체 내용
           envs: KAKAO_REST_API,KAKAO_SECRET,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,DB_NAME,DB_USERNAME,DB_PASSWORD
-          # 원격 서버에서 실행할 명령들
+          # 원격에서 할 일: 코드 최신화 → 배포 스크립트 실행 (로직은 scripts/deploy.sh 참고)
           script: |
-            set -euo pipefail
-
-            REPO_DIR="$HOME/board"
-            REPO_URL="https://github.com/icesnake72/boards.git"
-
-            echo "▶ 저장소 준비(없으면 clone, 있으면 최신화)"
-            if [ ! -d "$REPO_DIR/.git" ]; then
-              git clone "$REPO_URL" "$REPO_DIR"
-            fi
-            cd "$REPO_DIR"
-            git fetch --all
-            git reset --hard origin/main       # 배포 브랜치. main 이외를 쓰면 이 줄을 변경
-
-            echo "▶ .env 생성(Secrets → 서버). 카카오 키는 fail-fast라 비면 기동 실패"
-            # DB_HOST/DB_PORT/APP_UPLOAD_DIR 는 compose가 서버용 값으로 강제하므로 여기서 쓰지 않는다.
-            cat > .env <<EOF
-            KAKAO_REST_API=${KAKAO_REST_API}
-            KAKAO_SECRET=${KAKAO_SECRET}
-            GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-            GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-            DB_NAME=${DB_NAME}
-            DB_USERNAME=${DB_USERNAME}
-            DB_PASSWORD=${DB_PASSWORD}
-            EOF
-
-            echo "▶ 전용 네트워크 준비(없으면 생성)"
-            docker network create board-db-net 2>/dev/null || true
-
-            echo "▶ mysql-8 준비(없으면 기동, 있으면 그대로 사용)"
-            if [ -n "$(docker ps -aq -f name=^mysql-8$)" ]; then
-              # 컨테이너는 있는데 멈춰 있으면 시작
-              [ -z "$(docker ps -q -f name=^mysql-8$)" ] && docker start mysql-8 || true
-            else
-              docker run -d --name mysql-8 \
-                --network board-db-net \
-                -e MYSQL_ROOT_PASSWORD="${DB_PASSWORD}" \
-                -e MYSQL_DATABASE="${DB_NAME}" \
-                -v mysql8-data:/var/lib/mysql \
-                mysql:8.0.33 --default-time-zone=+09:00
-            fi
-            # mysql-8 이 board-db-net 에 연결돼 있도록 보장(이미 연결돼 있으면 무시)
-            docker network connect board-db-net mysql-8 2>/dev/null || true
-
-            echo "▶ mysql-8 준비 대기(최대 ~60s)"
-            for i in $(seq 1 30); do
-              if docker exec mysql-8 mysqladmin ping -h127.0.0.1 -uroot -p"${DB_PASSWORD}" --silent >/dev/null 2>&1; then
-                echo "  mysql-8 ready"; break
-              fi
-              sleep 2
-            done
-
-            echo "▶ 컨테이너 빌드·재기동(로컬과 동일한 docker compose)"
-            docker compose up -d --build
-
-            echo "▶ 기본 게시판 시드(utf8mb4 · 깨진 데모 자동 교정 · 멱등)"
-            # 핵심: --default-character-set=utf8mb4 로 접속해야 한글이 안 깨진다.
-            # @garbled: boards가 있는데 정상 이름('자유게시판')이 없으면 = 이전에 깨져 저장된 상태.
-            #   그 경우 글 없는(데모) 게시판만 지우고 재시드한다(글 달린 게시판은 보존, 정상 상태면 무동작).
-            docker exec mysql-8 mysql --default-character-set=utf8mb4 -uroot -p"${DB_PASSWORD}" "${DB_NAME}" -e "
-              SET NAMES utf8mb4;
-              SET @garbled := (SELECT CASE WHEN COUNT(*)>0 AND SUM(name='자유게시판')=0 THEN 1 ELSE 0 END FROM boards);
-              DELETE b FROM boards b LEFT JOIN posts p ON p.board_id=b.id WHERE p.id IS NULL AND @garbled=1;
-              INSERT INTO boards (name, description, created_at, updated_at)
-              SELECT name, description, NOW(), NOW() FROM (
-                SELECT '자유게시판' AS name, '아무 이야기나 나누는 공간' AS description
-                UNION ALL SELECT '공지사항', '관리자 공지'
-                UNION ALL SELECT 'Q&A', '질문과 답변'
-              ) AS seed
-              WHERE NOT EXISTS (SELECT 1 FROM boards);
-            " && echo "  시드/교정 OK" || echo "  시드 실패"
-            echo "  현재 게시판 목록(한글 정상 표시되어야):"
-            docker exec mysql-8 mysql --default-character-set=utf8mb4 -uroot -p"${DB_PASSWORD}" "${DB_NAME}" -N -e "SELECT CONCAT('    #',id,' ',name,' — ',IFNULL(description,'')) FROM boards ORDER BY id;" 2>/dev/null || echo "    (조회 실패)"
-
-            echo "▶ 사용 안 하는 옛 이미지 정리(디스크 확보)"
-            docker image prune -f
-
-            echo "▶ 상태 확인"
-            docker compose ps
-
-            echo "▶ 검증: 프론트(80) 준비 대기"
-            for i in $(seq 1 30); do
-              code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1/ || echo 000)
-              [ "$code" = "200" ] && { echo "  frontend(80) → 200 ready"; break; }
-              sleep 2
-            done
-
-            echo "▶ 검증: 외부 노출 여부(백엔드·DB는 publish 없어야 비공개)"
-            apppub=$(docker port board-app 2>/dev/null || true)
-            dbpub=$(docker port mysql-8 2>/dev/null || true)
-            echo "  board-app publish: ${apppub:-없음(비공개 OK)}"
-            echo "  mysql-8  publish: ${dbpub:-없음(비공개 OK)}"
-
-            echo "▶ 검증: OAuth 개시(프론트80 프록시 경유, Host=3.34.173.34) — 302 + redirect_uri 확인"
-            for p in kakao google; do
-              echo "  [$p]"
-              curl -s -o /dev/null -D - -H "Host: 3.34.173.34" "http://127.0.0.1/oauth2/authorization/$p" \
-                | tr -d '\r' | grep -iE "^HTTP/|^location:" | sed 's/^/    /' || true
-            done
+            set -e
+            [ -d ~/board/.git ] || git clone https://github.com/icesnake72/boards.git ~/board
+            cd ~/board
+            git fetch --all && git reset --hard origin/main
+            ./scripts/deploy.sh

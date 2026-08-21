@@ -34,6 +34,9 @@ flowchart LR
 
 관련 파일: `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.env.example` (모두 저장소 루트).
 
+> [!NOTE]
+> 이 문서의 compose 예시는 도커화 **개념**(모드 A 자체완결 / 모드 B 기존 DB 브리지)을 설명하기 위한 것이다. 실제 커밋된 `docker-compose.yml`은 여기서 더 진화해 **프론트 2종(순수 JS·React)을 추가**하고, **백엔드(`board-app:8090`)의 host publish를 제거**(외부 비공개)했으며, **순수 JS 프론트를 host 80(공개 진입점)** 으로 노출한다. 전체 배포 구조는 [[FRONTEND-DEPLOY]]·[[DEPLOY-LIGHTSAIL]]를 참고한다.
+
 ---
 
 ## 2. Dockerfile — 멀티스테이지
@@ -261,6 +264,9 @@ flowchart LR
 - **컨테이너명 DNS**: 사용자 정의 브리지 네트워크(`board-db-net`)에서는 컨테이너명(`mysql-8`)이 그대로 DNS로 해석된다. 그래서 `DB_HOST: mysql-8`로 접속된다. (기본 `bridge` 네트워크는 이름 해석이 안 되므로 전용 네트워크가 필요하다.)
 - **비파괴 연결**: `mysql-8`의 기존 네트워크(`alldayai-network` 등)는 그대로 두고 `board-db-net`만 **추가**한다. 되돌리려면 `docker network disconnect board-db-net mysql-8`.
 - **격리**: 전용 네트워크를 따로 만들어, 앱을 무관한 다른 스택과 섞지 않으면서 DB에만 브리지한다.
+
+> [!NOTE]
+> 위 예시의 `ports: "8090:8090"`(백엔드를 host에 publish)은 curl로 직접 확인하기 쉬운 **실습용 설정**이다. 실제 커밋된 compose는 이 host publish를 **제거**해 백엔드를 비공개로 두고, 공개 프론트(80)의 Nginx가 `board-app:8090`으로 프록시한다([[FRONTEND-DEPLOY]]·[[DEPLOY-LIGHTSAIL]]).
 
 ---
 
