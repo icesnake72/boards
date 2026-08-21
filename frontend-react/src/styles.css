@@ -270,3 +270,8 @@ main.wrap {
 .comment-head { display: flex; gap: 8px; align-items: baseline; }
 .comment-content { margin: 4px 0 6px; white-space: pre-wrap; }
 .comment-actions { display: flex; gap: 6px; align-items: center; }
+
+/* 소셜 로그인 버튼 */
+.btn.kakao { background: #fee500; border-color: #fee500; color: #191919; }
+.btn.kakao:hover { opacity: 0.9; }
+.btn.google { background: #fff; }

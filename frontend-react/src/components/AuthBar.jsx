@@ -1,11 +1,24 @@
 import { useState } from "react";
 import { login, logout, signup } from "../api.js";
 
-// 헤더의 인증 영역: 비로그인 → 로그인/회원가입 폼, 로그인 → 사용자표시 + 로그아웃.
+// 소셜 로그인 실패 시 백엔드가 /?error=OAUTH_LOGIN_FAILED 로 리다이렉트한다 — 한 번 읽고 URL 정리.
+function consumeOauthError() {
+  const err = new URLSearchParams(window.location.search).get("error");
+  if (err) window.history.replaceState(null, "", window.location.pathname);
+  return err ? `소셜 로그인에 실패했습니다 (${err})` : "";
+}
+
+// 소셜 로그인은 fetch가 아니라 "전체 리다이렉트"로 시작한다(제공자 동의 화면으로 이동).
+// 성공하면 백엔드가 refresh 쿠키를 심고 "/"로 돌려보내고, SPA의 silent login이 세션을 복원한다.
+function startSocialLogin(provider) {
+  window.location.href = `/oauth2/authorization/${provider}`;
+}
+
+// 헤더의 인증 영역: 비로그인 → 로그인/회원가입 폼 + 소셜 로그인, 로그인 → 사용자표시 + 로그아웃.
 export default function AuthBar({ user, onAuthed, onLoggedOut }) {
   const [mode, setMode] = useState("login");   // login | signup
   const [form, setForm] = useState({ username: "", password: "", email: "", nickname: "" });
-  const [msg, setMsg] = useState("");
+  const [msg, setMsg] = useState(consumeOauthError);
   const [busy, setBusy] = useState(false);
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
@@ -59,6 +72,8 @@ export default function AuthBar({ user, onAuthed, onLoggedOut }) {
           <input type="password" placeholder="비밀번호" value={form.password} onChange={set("password")} autoComplete="current-password" />
           <button className="btn primary" disabled={busy}>로그인</button>
           <button type="button" className="btn" onClick={() => { setMode("signup"); setMsg(""); }}>회원가입</button>
+          <button type="button" className="btn kakao" onClick={() => startSocialLogin("kakao")}>카카오 로그인</button>
+          <button type="button" className="btn google" onClick={() => startSocialLogin("google")}>구글 로그인</button>
         </form>
       ) : (
         <form className="auth-form" onSubmit={handleSignup}>

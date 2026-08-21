@@ -54,12 +54,18 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
     TokenPair tokens = authService.issueTokenPair(user);
     log.info("OAuth 로그인 성공(표준 경로): username={}", user.getUsername());
 
-    response.setStatus(HttpServletResponse.SC_OK);
-    response.setContentType(MediaType.APPLICATION_JSON_VALUE + ";charset=UTF-8");
+    // SPA 전환 처리: 소셜 로그인은 전체 리다이렉트 흐름이라, JSON을 응답하면 브라우저에
+    // 날 JSON이 그대로 떠 버린다(SPA가 본문을 받을 수 없음). 그래서 refresh 쿠키만 심고
+    // SPA 루트("/")로 리다이렉트한다 — SPA는 로드 시 silent login(reissue)으로 이 쿠키를
+    // 사용해 access token을 얻는다. access token을 URL에 싣지 않으므로 노출 위험도 없다.
     response.addHeader(HttpHeaders.SET_COOKIE,
         refreshCookieFactory.create(tokens.refreshToken(), tokens.refreshTokenValiditySeconds())
             .toString());
-    objectMapper.writeValue(response.getWriter(),
-        TokenResponse.bearer(tokens.accessToken(), tokens.accessTokenValiditySeconds()));
+    response.sendRedirect("/");
+    // SPA 전환 처리에 의해 제거 — 기존 JSON 응답(access token 본문):
+    // response.setStatus(HttpServletResponse.SC_OK);
+    // response.setContentType(MediaType.APPLICATION_JSON_VALUE + ";charset=UTF-8");
+    // objectMapper.writeValue(response.getWriter(),
+    //     TokenResponse.bearer(tokens.accessToken(), tokens.accessTokenValiditySeconds()));
   }
 }
