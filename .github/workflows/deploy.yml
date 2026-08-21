@@ -67,6 +67,8 @@ jobs:
           host: ${{ secrets.LIGHTSAIL_HOST }}
           username: ${{ secrets.LIGHTSAIL_USER }}
           key: ${{ secrets.LIGHTSAIL_SSH_KEY }}          # webserver_key.pem 전체 내용
+          # 서버(소형 인스턴스)에서 gradle+npm 빌드가 병렬로 돌면 기본 10분을 넘길 수 있다
+          command_timeout: 30m
           envs: KAKAO_REST_API,KAKAO_SECRET,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,DB_NAME,DB_USERNAME,DB_PASSWORD
           # 원격에서 할 일: 코드 최신화 → 배포 스크립트 실행 (로직은 scripts/deploy.sh 참고)
           script: |
