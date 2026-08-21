@@ -39,10 +39,23 @@ timeout 60 bash -c \
   'until docker exec mysql-8 mysqladmin ping -uroot -p"$DB_PASSWORD" --silent 2>/dev/null; do sleep 2; done'
 echo "  mysql-8 ready"
 
-echo "▶ 빌드·재기동 + 헬스체크 통과까지 대기(--wait)"
+echo "▶ 스왑 보장(2GB 인스턴스 OOM 방어 — 이미 있으면 통과)"
+# 소형 인스턴스에서 gradle+npm 빌드 중 메모리 고갈로 서버가 멈춘 사례가 있어,
+# 2G 스왑을 한 번 만들어 둔다(재부팅 후에도 이 스크립트가 다시 켜 준다).
+if ! swapon --show | grep -q /swapfile; then
+  sudo fallocate -l 2G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
+  sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+  echo "  swap 2G 활성화"
+fi
+
+echo "▶ 빌드(직렬) — 2GB 인스턴스에서 gradle·npm 병렬 빌드는 OOM을 부른다"
+docker compose build app                      # 무거운 gradle 빌드 단독 실행
+docker compose build frontend frontend-react  # npm(react)·정적(vanilla) 빌드
+
+echo "▶ 재기동 + 헬스체크 통과까지 대기(--wait)"
 # --wait: healthcheck가 있는 모든 서비스(백엔드·프론트 2종)가 healthy 될 때까지 기다리고,
 #         하나라도 실패하면 비정상 종료 → set -e로 배포 실패 처리(별도 검증 루프 불필요)
-docker compose up -d --build --wait
+docker compose up -d --wait
 
 echo "▶ 옛 이미지 정리 + 최종 상태"
 docker image prune -f
