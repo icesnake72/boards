@@ -174,3 +174,99 @@ main.wrap {
     flex-basis: 100%;
   }
 }
+
+/* ── 인증·게시판 연동 확장 (로그인/글/댓글/반응) ───────────────────── */
+
+.header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.clickable { cursor: pointer; }
+
+.auth-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.auth-form { display: flex; gap: 6px; flex-wrap: wrap; }
+.auth-form input {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 13px;
+  width: 130px;
+}
+.auth-user { font-size: 14px; font-weight: 600; color: var(--accent); }
+.auth-msg { font-size: 12px; color: var(--danger); flex-basis: 100%; }
+
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { opacity: 0.9; }
+.btn.tiny { padding: 3px 9px; font-size: 12px; border-radius: 6px; }
+.btn.danger { color: var(--danger); border-color: var(--danger); }
+.btn.active { background: var(--accent-weak); border-color: var(--accent); font-weight: 700; }
+
+.section-title { margin: 0; font-size: 18px; }
+
+.inline-form {
+  margin-top: 18px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 8px;
+}
+.inline-form input, .inline-form textarea {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-family: inherit;
+}
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row input { flex: 1 1 200px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+.form-msg { font-size: 13px; color: var(--muted); }
+
+.chevron { color: var(--muted); font-size: 20px; }
+
+.post-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.post-row {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.thumb { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; }
+.post-row-body { flex: 1 1 auto; min-width: 0; }
+.post-title { margin: 0; font-weight: 600; }
+.post-meta { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+
+.post-detail {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+  margin-bottom: 20px;
+}
+.post-detail h2 { margin: 0 0 4px; }
+.post-content { white-space: pre-wrap; margin: 12px 0; }
+.post-images { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.post-images img { max-width: 240px; border-radius: 8px; border: 1px solid var(--border); }
+
+.reactions { display: inline-flex; gap: 6px; }
+
+.comment-list, .comment-children { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.comment {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+.comment.reply { margin-left: 26px; background: var(--bg); }
+.comment-children { margin-top: 8px; }
+.comment-head { display: flex; gap: 8px; align-items: baseline; }
+.comment-content { margin: 4px 0 6px; white-space: pre-wrap; }
+.comment-actions { display: flex; gap: 6px; align-items: center; }

@@ -61,7 +61,7 @@ services:
       app:
         condition: service_healthy   # 백엔드가 응답 가능해진 뒤 노출
     ports:
-      - "80:80"                       # 공개 진입점 → http://3.34.173.34 (포트 생략)
+      - "8070:80"                     # 학습·비교용(순수 JS 원형). 서버 방화벽을 열지 않으면 외부 비공개
     networks:
       - board-db-net                  # board-app 과 같은 네트워크라야 컨테이너명으로 프록시된다
     healthcheck:
@@ -74,7 +74,7 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # React(Vite) 버전 — 순수 JS 프론트와 구현 동일, 빌드만 멀티스테이지(Node→Nginx).
+  # React(Vite) 버전 — production 메인 프론트. 빌드는 멀티스테이지(Node→Nginx).
   frontend-react:
     build:
       context: ./frontend-react
@@ -85,7 +85,7 @@ services:
       app:
         condition: service_healthy
     ports:
-      - "8071:80"                     # 브라우저: http://localhost:8071
+      - "80:80"                       # 공개 진입점(메인) → http://3.34.173.34 (별도 포트 개방 불필요)
     networks:
       - board-db-net                  # board-app 과 같은 네트워크(컨테이너명 프록시)
     healthcheck:

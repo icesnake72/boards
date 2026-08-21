@@ -146,7 +146,7 @@ gh secret list        # 이름과 갱신 시각만 보인다(값은 다시 볼 �
 2. 서버 준비 완료([[DEPLOY-LIGHTSAIL]] §1~§8)
 3. `main`에 push(또는 Actions 탭에서 **Run workflow** 수동 실행)
 4. 저장소 **Actions** 탭에서 `test → deploy` 진행 로그 확인
-5. 성공 후 브라우저: `http://3.34.173.34` (80 — 포트 생략), `http://3.34.173.34:8071`
+5. 성공 후 브라우저: `http://3.34.173.34` (React 메인, 80 — 포트 생략)
 
 > [!TIP]
 > 현재 작업은 `step13-reactions` 브랜치에 있다. 파이프라인은 `main` 기준이므로, 배포하려면 **main에 머지**하거나 `deploy.yml`의 트리거 브랜치와 스크립트의 `origin/main` 을 해당 브랜치로 바꾼다.
@@ -161,4 +161,4 @@ gh secret list        # 이름과 갱신 시각만 보인다(값은 다시 볼 �
 | deploy 스크립트 `permission denied ... docker.sock` | 서버에서 `usermod -aG docker` 미적용([[DEPLOY-LIGHTSAIL]] §4) |
 | 앱 기동 실패(카카오 IllegalState) | `KAKAO_*` Secret 누락·오타 → `.env`가 빈 값으로 생성됨 |
 | test 잡 실패로 배포 안 됨 | 테스트가 실제로 깨진 것 → 로컬 `./gradlew test`로 재현·수정 |
-| 접속은 되나 80/8071 응답 없음 | Lightsail 방화벽에 80·8071 미개방([[DEPLOY-LIGHTSAIL]] §2) |
+| 접속은 되나 80 응답 없음 | Lightsail 방화벽에 80 미개방([[DEPLOY-LIGHTSAIL]] §2) |

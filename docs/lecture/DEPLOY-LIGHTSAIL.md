@@ -23,14 +23,14 @@ flowchart LR
   GH -->|"② SSH 접속"| LS["Lightsail 3.34.173.34"]
   subgraph LS["Lightsail 인스턴스"]
     APP["board-app :8090 (내부 전용·비공개)"] -->|"board-db-net"| DB[("mysql-8 : board (비공개)")]
-    FE1["board-frontend :80"] -->|"/api·/oauth2 프록시"| APP
-    FE2["board-frontend-react :8071"] -->|"/api 프록시"| APP
+    FE1["board-frontend :8070 학습용"] -->|"/api·/oauth2 프록시"| APP
+    FE2["board-frontend-react :80 메인"] -->|"/api·/oauth2 프록시"| APP
   end
-  USER["사용자 브라우저"] -->|":80 / :8071"| LS
+  USER["사용자 브라우저"] -->|":80"| LS
 ```
 
-- **공개 진입점은 프론트뿐이다.** 순수 JS 프론트가 host **80**(공개 진입점), React 프론트가 **8071**로 노출된다. 백엔드(`board-app:8090`)와 DB(`mysql-8`)는 **host에 포트를 publish하지 않아 외부에서 직접 접근할 수 없고**, board-db-net 안에서 프론트의 Nginx만 컨테이너명 `board-app:8090`으로 프록시한다.
-- **소셜 로그인**은 공개 프론트(80)의 Nginx가 `/oauth2/`·`/login/oauth2/`까지 백엔드로 중계한다(§7 참고). React 프론트(8071)의 Nginx는 `/api/`만 프록시하므로 소셜 로그인 개시는 80 진입점을 쓴다.
+- **공개 진입점은 프론트뿐이다.** **React 프론트가 host 80(공개 진입점·메인)** 이고, 순수 JS 프론트는 **8070**(학습·비교용 — 방화벽을 열지 않으면 외부에서 접근 불가)이다. 기존 8071 포트는 폐지됐다. 백엔드(`board-app:8090`)와 DB(`mysql-8`)는 **host에 포트를 publish하지 않아 외부에서 직접 접근할 수 없고**, board-db-net 안에서 프론트의 Nginx만 컨테이너명 `board-app:8090`으로 프록시한다.
+- **소셜 로그인**은 메인 진입점인 React 프론트(80)의 Nginx가 `/oauth2/`·`/login/oauth2/`까지 백엔드로 중계한다(§10 참고). 순수 JS 프론트(8070)의 Nginx도 동일한 oauth 프록시 구성을 유지한다.
 
 서버가 갖춰야 할 것: **Docker + docker compose**, **mysql-8 컨테이너**, **board-db-net 네트워크**, **저장소 클론(~/board)**, **방화벽 포트 개방**. 이 중 Docker 설치만 수동이고, mysql-8·네트워크·저장소·`.env`는 이제 [[CICD-GITHUB-ACTIONS]] 파이프라인이 **없으면 자동 생성**한다(§5~§9). 아래 순서대로 준비한다.
 
@@ -43,11 +43,11 @@ Lightsail 콘솔 → 인스턴스 → **네트워킹** 탭 → **IPv4 방화벽*
 | 애플리케이션 | 프로토콜 | 포트 | 용도 |
 |---|---|---|---|
 | SSH | TCP | 22 | 접속·배포(기본 열림) |
-| HTTP | TCP | 80 | 순수 JS 프론트(공개 진입점) |
-| Custom | TCP | 8071 | React 프론트 |
+| HTTP | TCP | 80 | React 프론트(공개 진입점·메인) |
+| Custom | TCP | 8070 | 순수 JS 프론트(학습용, 선택) |
 
 > [!NOTE]
-> 프론트(80/8071)가 내부에서 `/api`를 백엔드로 프록시하므로, 최소 요건은 **80·8071·22** 다. **8090(백엔드)은 방화벽에 열지 않는다** — 백엔드와 DB(mysql-8)는 host에 publish하지 않아 애초에 외부에서 닿지 않으며, 비공개 상태를 유지한다. 실서비스라면 80을 443(HTTPS)로 좁히고 나머지는 닫는다.
+> 프론트(80)가 내부에서 `/api`를 백엔드로 프록시하므로, 최소 요건은 **80·22** 다(8070은 학습용 프론트를 외부에서 보고 싶을 때만 선택 개방). **8090(백엔드)은 방화벽에 열지 않는다** — 백엔드와 DB(mysql-8)는 host에 publish하지 않아 애초에 외부에서 닿지 않으며, 비공개 상태를 유지한다. 실서비스라면 80을 443(HTTPS)로 좁히고 나머지는 닫는다.
 
 ---
 
@@ -148,8 +148,8 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/api/v1/boards  # /api 
 ```
 
 브라우저에서 확인:
-- 순수 JS 프론트: `http://3.34.173.34` (80 — 포트 생략)
-- React 프론트: `http://3.34.173.34:8071`
+- React 프론트(메인): `http://3.34.173.34` (80 — 포트 생략)
+- 순수 JS 프론트(학습용): `http://3.34.173.34:8070` (방화벽에서 8070을 개방한 경우만)
 
 여기까지 성공하면 서버 준비 완료다.
 
@@ -170,7 +170,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/api/v1/boards  # /api 
 
 ## 10. 소셜 로그인 — 비공개 백엔드 + 프론트 프록시
 
-백엔드가 비공개(host publish 없음)라, 소셜 로그인 흐름은 **공개 프론트(80)의 Nginx가 중계**한다.
+백엔드가 비공개(host publish 없음)라, 소셜 로그인 흐름은 **공개 프론트(React, 80)의 Nginx가 중계**한다. 순수 JS 프론트(8070)의 Nginx도 같은 oauth 프록시 구성을 갖는다.
 
 - **프론트(80) Nginx가 `/oauth2/`·`/login/oauth2/`를 프록시**한다. 브라우저는 `http://3.34.173.34/oauth2/authorization/{kakao|google}` 로 로그인을 개시하고, Nginx가 이를 `board-app:8090`으로 넘긴다.
 - 프론트 Nginx는 `X-Forwarded-Host`/`X-Forwarded-Proto`를 전달하고, 백엔드 `application.yaml`의 `server.forward-headers-strategy: framework`가 이를 반영해 `redirect_uri`를 내부 `board-app:8090`이 아니라 실제 공개 주소 `http://3.34.173.34/login/oauth2/code/*` 로 계산한다.
@@ -187,7 +187,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/api/v1/boards  # /api 
 |---|---|
 | 배포 스크립트에서 `permission denied ... docker.sock` | §4의 `usermod -aG docker` 미적용 → 적용 후 재접속 |
 | 앱 기동 즉시 종료 + 카카오 관련 IllegalState | `.env`의 `KAKAO_*`가 비었거나 미해석 → 값 확인([[DOCKER]] §4) |
-| 브라우저에서 80/8071 접속 불가 | Lightsail 방화벽(§2)에 80·8071 미개방 |
+| 브라우저에서 80 접속 불가 | Lightsail 방화벽(§2)에 80 미개방 |
 | `curl localhost:8090` 응답 없음 | 정상이다 — 백엔드는 host에 publish하지 않는다. `curl localhost/api/v1/boards`(프론트 프록시)로 확인(§8) |
 | 앱이 DB 연결 실패(Communications link) | mysql-8 미기동 또는 board-db-net 미연결(§5) |
 | 구글 로그인이 콘솔에서 거부됨 | 구글은 http redirect_uri 불가 → HTTPS 전환 필요(§10). 카카오는 http 허용 |
