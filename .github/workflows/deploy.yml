@@ -70,7 +70,38 @@ jobs:
           # 서버(소형 인스턴스)에서 gradle+npm 빌드가 병렬로 돌면 기본 10분을 넘길 수 있다
           command_timeout: 30m
           envs: KAKAO_REST_API,KAKAO_SECRET,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,DB_NAME,DB_USERNAME,DB_PASSWORD
-          # 원격에서 할 일: 코드 최신화 → 배포 스크립트 실행 (로직은 scripts/deploy.sh 참고)
+          # ── 원격 서버에서 실행되는 셸 명령(5줄) — "코드 최신화 → 배포 스크립트 실행" ──
+          #
+          # set -e
+          #   "어느 한 줄이라도 실패(exit≠0)하면 즉시 중단하라"는 셸 안전장치.
+          #   이게 없으면 clone이 실패해도 다음 줄로 넘어가 엉뚱한 상태로 배포가 진행된다.
+          #   중단되면 이 스텝이 실패 처리되어 Actions에 빨간불이 켜진다.
+          #
+          # [ -d ~/board/.git ] || git clone https://github.com/icesnake72/boards.git ~/board
+          #   "~/board/.git 디렉터리가 있는가?"(= 이미 클론돼 있는가)를 검사해서,
+          #   없을 때만(|| = 앞 명령이 실패했을 때만) 저장소를 클론한다.
+          #   → 최초 배포는 자동 클론, 이후 배포는 건너뜀(멱등). 서버를 새로 만들어도
+          #     이 한 줄 덕에 수동 클론 작업이 필요 없다. (공개 저장소라 인증도 불필요)
+          #
+          # cd ~/board
+          #   이후 명령들의 작업 디렉터리를 저장소 루트로 이동.
+          #   git 명령과 ./scripts/deploy.sh 상대경로가 모두 이 위치를 전제한다.
+          #
+          # git fetch --all && git reset --hard origin/main
+          #   fetch: 원격(GitHub)의 최신 커밋 정보를 가져온다(아직 작업본은 그대로).
+          #   reset --hard origin/main: 서버 작업본을 원격 main과 "강제로 완전히 일치"시킨다.
+          #   pull(merge) 대신 reset --hard를 쓰는 이유 — 서버에서 누가 파일을 손댔거나
+          #   이전 배포 잔여물이 있어도 충돌 없이 항상 main 스냅샷 그대로가 보장된다
+          #   (서버는 코드를 편집하는 곳이 아니라 "받아서 실행만 하는 곳"이라는 원칙).
+          #   주의: 서버에서 직접 고친 파일은 덮어써 사라진다 — 의도된 동작이다.
+          #   && 는 fetch가 성공했을 때만 reset을 실행한다는 뜻.
+          #
+          # ./scripts/deploy.sh
+          #   실제 배포 로직(.env 생성 → mysql-8 준비 → 스왑 보장 → 직렬 빌드 →
+          #   compose up --wait → 정리)은 저장소에 버전관리되는 이 스크립트가 담당한다.
+          #   방금 reset으로 받아온 "최신 main의 스크립트"가 실행되므로, 배포 절차를
+          #   바꾸고 싶으면 이 yml이 아니라 deploy.sh를 고쳐 커밋하면 된다.
+          #   역할 분리: 워크플로(yml)는 "언제·어디서", deploy.sh는 "무엇을".
           script: |
             set -e
             [ -d ~/board/.git ] || git clone https://github.com/icesnake72/boards.git ~/board
