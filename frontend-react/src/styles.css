@@ -270,3 +270,10 @@ main.wrap {
 .comment-head { display: flex; gap: 8px; align-items: baseline; }
 .comment-content { margin: 4px 0 6px; white-space: pre-wrap; }
 .comment-actions { display: flex; gap: 6px; align-items: center; }
+
+/* 소셜 로그인 버튼 — 브랜드 스타일(아이콘 + 색) */
+.btn.social { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; }
+.btn.kakao { background: #fee500; border-color: #fee500; color: #191919; }
+.btn.kakao:hover { background: #f6dc00; border-color: #f6dc00; }
+.btn.google { background: #fff; color: #3c4043; border-color: #dadce0; }
+.btn.google:hover { background: #f8f9fa; border-color: #dadce0; }
