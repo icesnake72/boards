@@ -8,8 +8,8 @@ status: 완료
 
 # AWS Lightsail 배포 설치 가이드 (서버 최초 세팅)
 
-- **대상 서버**: AWS Lightsail 인스턴스 `3.34.173.34` (Ubuntu 기준)
-- **목표**: 로컬에서 하던 방식 그대로(`docker compose`) Lightsail에서 백엔드 + 프론트 2종을 띄우고, 이후 배포는 [[CICD-GITHUB-ACTIONS]]의 파이프라인이 자동으로 잇는다.
+- **대상 서버**: AWS Lightsail 인스턴스 `3.34.173.34` (Amazon Linux 2023 기준)
+- **목표**: 로컬에서 하던 방식 그대로(`docker compose`) Lightsail에서 백엔드 + 프론트 2종을 띄우고, 이후 배포는 [[CICD-GITHUB-ACTIONS]]의 파이프라인이 자동으로 잇는다. 빌드는 CI(GitHub Actions 러너)가 전담하고 서버는 이미지 pull + 실행만 하므로 **스왑 없이(0B) 운영하는 무스왑 설계**다.
 - **역할 분담**: 이 문서는 **서버를 한 번 준비하는 수동 작업**(Docker·MySQL·네트워크·저장소)이다. 코드가 바뀔 때마다의 재배포는 GitHub Actions가 SSH로 처리하므로 다시 손댈 필요가 없다.
 
 ---
@@ -20,7 +20,9 @@ status: 완료
 flowchart LR
   DEV["개발자 git push (main)"] --> GH["GitHub Actions"]
   GH -->|"① test 통과"| GH
-  GH -->|"② SSH 접속"| LS["Lightsail 3.34.173.34"]
+  GH -->|"② build — 이미지 push"| GHCR["ghcr.io 이미지 3종"]
+  GH -->|"③ SSH 접속"| LS["Lightsail 3.34.173.34"]
+  GHCR -->|"docker compose pull"| LS
   subgraph LS["Lightsail 인스턴스"]
     APP["board-app :8090 (내부 전용·비공개)"] -->|"board-db-net"| DB[("mysql-8 : board (비공개)")]
     FE1["board-frontend :8070 학습용"] -->|"/api·/oauth2 프록시"| APP
@@ -31,8 +33,9 @@ flowchart LR
 
 - **공개 진입점은 프론트뿐이다.** **React 프론트가 host 80(공개 진입점·메인)** 이고, 순수 JS 프론트는 **8070**(학습·비교용 — 방화벽을 열지 않으면 외부에서 접근 불가)이다. 기존 8071 포트는 폐지됐다. 백엔드(`board-app:8090`)와 DB(`mysql-8`)는 **host에 포트를 publish하지 않아 외부에서 직접 접근할 수 없고**, board-db-net 안에서 프론트의 Nginx만 컨테이너명 `board-app:8090`으로 프록시한다.
 - **소셜 로그인**은 메인 진입점인 React 프론트(80)의 Nginx가 `/oauth2/`·`/login/oauth2/`까지 백엔드로 중계한다(§10 참고). 순수 JS 프론트(8070)의 Nginx도 동일한 oauth 프록시 구성을 유지한다.
+- **빌드는 CI에서, 서버는 pull + 실행만(무스왑)**: 이미지 3종은 GitHub Actions 러너가 빌드해 ghcr.io에 push하고, 서버는 `docker compose pull` 후 기동만 한다 — 2GB 인스턴스에서 gradle/npm 빌드 부하가 사라져 스왑 없이 안전하다.
 
-서버가 갖춰야 할 것: **Docker + docker compose**, **mysql-8 컨테이너**, **board-db-net 네트워크**, **저장소 클론(~/board)**, **방화벽 포트 개방**. 이 중 Docker 설치만 수동이고, mysql-8·네트워크·저장소·`.env`는 이제 [[CICD-GITHUB-ACTIONS]] 파이프라인이 **없으면 자동 생성**한다(§5~§9). 아래 순서대로 준비한다.
+서버가 갖춰야 할 것: **Docker + docker compose**, **mysql-8 컨테이너**, **board-db-net 네트워크**, **저장소 클론(~/board)**, **방화벽 포트 개방**. 이 중 Docker 설치만 수동이고, git(AL2023엔 기본 미설치)·mysql-8·네트워크·저장소·`.env`는 이제 [[CICD-GITHUB-ACTIONS]] 파이프라인이 **없으면 자동 생성**한다(§5~§9). 아래 순서대로 준비한다.
 
 ---
 
@@ -53,27 +56,39 @@ Lightsail 콘솔 → 인스턴스 → **네트워킹** 탭 → **IPv4 방화벽*
 
 ## 3. SSH 접속
 
-방금 발급한 키(`webserver_key.pem`, git에는 커밋하지 않음)로 접속한다.
+발급받은 서버 SSH 개인키(`.pem`, 현재 파일명 `ls_server_key.pem` — git에는 커밋하지 않음)로 접속한다.
 
 ```bash
-chmod 400 webserver_key.pem
-ssh -i webserver_key.pem ubuntu@3.34.173.34
+chmod 400 ls_server_key.pem
+ssh -i ls_server_key.pem ec2-user@3.34.173.34
 ```
 
-- 사용자명은 블루프린트에 따라 다르다: **Ubuntu → `ubuntu`**, Amazon Linux → `ec2-user`, Bitnami → `bitnami`.
+- 사용자명은 블루프린트에 따라 다르다: **Amazon Linux → `ec2-user`(현재 서버)**, Ubuntu → `ubuntu`(참고), Bitnami → `bitnami`.
 
 ---
 
 ## 4. Docker 설치 (서버에서)
 
+Amazon Linux 2023은 `dnf` 기본 저장소에 `docker` 패키지가 있다(Ubuntu에서 쓰던 get.docker.com 편의 스크립트는 AL2023 미지원).
+
 ```bash
-# 공식 편의 스크립트로 Docker Engine + compose 플러그인 설치
-curl -fsSL https://get.docker.com | sudo sh
+# Docker Engine 설치 + 부팅 시 자동 시작 + 즉시 기동
+sudo dnf install -y docker
+sudo systemctl enable --now docker
 
 # 현재 사용자를 docker 그룹에 추가 → 이후 sudo 없이 docker 실행(CD 스크립트 전제)
-sudo usermod -aG docker $USER
+sudo usermod -aG docker ec2-user
 # 그룹 반영을 위해 로그아웃 후 재접속(또는 `newgrp docker`)
 exit
+```
+
+compose 플러그인은 dnf 저장소에 없으므로, 공식 릴리스 바이너리를 CLI 플러그인 경로에 직접 설치한다:
+
+```bash
+sudo mkdir -p /usr/local/lib/docker/cli-plugins
+sudo curl -fsSL -o /usr/local/lib/docker/cli-plugins/docker-compose \
+  https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64
+sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 ```
 
 재접속 후 확인:
@@ -84,6 +99,9 @@ docker version && docker compose version
 
 > [!IMPORTANT]
 > GitHub Actions의 배포 스크립트는 `sudo` 없이 `docker compose`를 실행한다. 위 `usermod -aG docker` 를 반드시 적용해 두어야 파이프라인이 성공한다.
+
+> [!NOTE]
+> AL2023엔 **git도 기본 미설치**지만 따로 깔 필요는 없다 — 파이프라인이 배포 시 `sudo dnf install -y git`으로 자동 설치한다(멱등 — 있으면 무동작).
 
 ---
 
@@ -160,9 +178,8 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/api/v1/boards  # /api 
 서버 세팅이 끝났으면, 코드가 바뀔 때마다 손으로 할 필요가 없다. **GitHub Secrets를 등록**하고 `main`에 push하면 [[CICD-GITHUB-ACTIONS]]의 워크플로(`.github/workflows/deploy.yml`)가:
 
 1. 테스트 실행(H2)
-2. Lightsail에 SSH 접속 → (없으면) board-db-net·mysql-8·저장소 자동 생성 → `.env` 재생성 → mysql-8 준비 대기 → 스왑 2G 보장 → 직렬 빌드(app → 프론트 2종) → `docker compose up -d --wait`
-3. **기본 게시판 시드(utf8mb4)**: 게시판이 하나도 없으면 `자유게시판`·`공지사항`·`Q&A`를 자동 생성한다(멱등 — 이미 있으면 무동작, 한글이 깨져 저장된 데모는 자동 교정).
-4. **배포 후 검증**: 프론트(80) 200 대기, 백엔드·DB가 host에 publish되지 않은 비공개 상태인지 확인, OAuth 개시(카카오·구글)가 302 + 올바른 `redirect_uri`를 돌려주는지 확인.
+2. **build 잡**: 이미지 3종(board-app·board-frontend·board-frontend-react)을 러너에서 빌드해 GHCR(ghcr.io)에 push — 서버 빌드 부하 0
+3. Lightsail에 SSH 접속 → (없으면) git 자동 설치·저장소 clone, board-db-net·mysql-8 자동 생성 → `.env` 재생성 → mysql-8 준비 대기 → **GHCR 로그인 → `docker compose pull` → `up -d --no-build --wait`** — healthcheck 있는 서비스 전부가 healthy가 될 때까지 대기하고, 하나라도 실패하면 배포가 실패한다(이것이 배포 검증의 전부).
 
 를 자동 수행한다. 필요한 Secret 항목과 등록 방법은 [[CICD-GITHUB-ACTIONS]] 문서를 따른다.
 
@@ -194,4 +211,5 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/api/v1/boards  # /api 
 | 앱이 DB 연결 실패(Communications link) | mysql-8 미기동 또는 board-db-net 미연결(§5) |
 | 구글 로그인이 콘솔에서 거부됨 | 구글은 http redirect_uri 불가 → HTTPS 전환 필요(§10). 카카오는 http 허용 |
 | 소셜 로그인 후 redirect_uri 불일치 | 카카오/구글 콘솔의 Redirect URI를 `http://3.34.173.34/login/oauth2/code/*` 로 등록(§10) |
-| 빌드 중 OOM/멈춤 | 2GB 인스턴스에서 gradle+npm 병렬 빌드로 실제 발생했던 사고 — 이제 `deploy.sh`가 **스왑 2G 보장 + 직렬 빌드**로 방어한다. 그래도 인스턴스가 멈추면(80·22 모두 무응답) Lightsail 콘솔 또는 `aws lightsail reboot-instance`로 재부팅 후 재배포(실제 복구 사례) |
+| 배포 중 OOM/무응답(과거 사고) | 서버 빌드 시절의 사고 — **서버는 더 이상 빌드하지 않으므로 빌드발 메모리 사고 자체가 소멸**했다(첫 콜드 배포 실측 피크 used 1017M·avail 715M·Swap 0B, pull+기동만 ~380MB 증가). 그래도 인스턴스가 멈추면 Lightsail 콘솔 또는 `aws lightsail reboot-instance`로 재부팅 후 재배포 |
+| GHCR pull 실패(unauthorized·denied) | 서버의 `docker login ghcr.io` 실패 또는 패키지 권한 문제 → 워크플로 `permissions.packages: write` 확인, `deploy.sh`가 단명 `GITHUB_TOKEN`으로 로그인하는지 Actions 로그 확인 |

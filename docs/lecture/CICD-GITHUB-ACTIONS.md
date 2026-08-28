@@ -9,7 +9,7 @@ status: 완료
 # GitHub Actions CI/CD — 파이프라인 요약 + Secret 설정
 
 - **대상 파일**: `.github/workflows/deploy.yml`
-- **한 줄 요약**: `main`에 push하면 → **테스트 통과 시** → Lightsail에 SSH로 접속해 **`git pull` + 직렬 빌드 + `docker compose up --wait`** 로 자동 재배포한다.
+- **한 줄 요약**: `main`에 push하면 → **테스트 통과 시** → **CI가 이미지 3종을 빌드해 GHCR(ghcr.io)에 push**하고 → Lightsail에 SSH로 접속해 **서버는 pull + 실행만**(`docker compose pull` + `up -d --no-build --wait`)으로 자동 재배포한다(무스왑 설계).
 - **선행 세팅**: 서버 준비는 [[DEPLOY-LIGHTSAIL]], 컨테이너 구조는 [[DOCKER]].
 
 ---
@@ -20,22 +20,22 @@ status: 완료
 flowchart TD
   PUSH["git push origin main"] --> TEST["job: test — ./gradlew test (H2)"]
   TEST -->|"실패"| STOP["배포 중단"]
-  TEST -->|"성공"| DEPLOY["job: deploy — SSH into Lightsail"]
-  DEPLOY --> PULL["코드 최신화 (없으면 clone, git reset --hard origin/main)"]
+  TEST -->|"성공"| BUILDJOB["job: build — 이미지 3종 빌드 후 GHCR push (GHA 캐시)"]
+  BUILDJOB --> DEPLOY["job: deploy — SSH into Lightsail"]
+  DEPLOY --> PULL["코드 최신화 (git 없으면 dnf 자동 설치, 없으면 clone, git reset --hard origin/main)"]
   PULL --> SH["scripts/deploy.sh 실행"]
   SH --> ENV[".env 생성 (Secrets → 서버)"]
   ENV --> DB["board-db-net·mysql-8 준비 + DB 응답 대기"]
-  DB --> SWAP["스왑 2G 보장 (OOM 방어)"]
-  SWAP --> BUILD["직렬 빌드 (app 다음 frontend들)"]
-  BUILD --> UP["docker compose up -d --wait (healthy까지 대기)"]
+  DB --> IMG["docker compose pull (GHCR)"]
+  IMG --> UP["up -d --no-build --wait (healthy까지 대기)"]
   UP --> PRUNE["docker image prune -f"]
 ```
 
 > [!NOTE]
 > 워크플로(yml)는 "**언제·어디서**"(트리거·SSH 접속)만 담당하고, "**무엇을**"(배포 로직)은 저장소의 `scripts/deploy.sh` 가 담당한다. 로직이 셸 파일로 분리돼 있어 읽기 쉽고, 서버에서 직접 실행해 디버깅할 수도 있다.
 
-- **두 잡(job)으로 나뉜다**: `test` → `deploy`. `deploy`는 `needs: test`라 **테스트가 깨지면 배포되지 않는다**(CI 게이트).
-- **레지스트리 없이 서버에서 직접 빌드**한다 — "로컬 방식 그대로"를 원격에서 실행하는 구조.
+- **세 잡(job)으로 나뉜다**: `test` → `build` → `deploy`. `needs:` 체인이라 **테스트가 깨지면 빌드도 배포도 되지 않는다**(CI 게이트).
+- **빌드는 러너(RAM 7GB)에서, 서버는 pull + 실행만** — 2GB 인스턴스의 gradle/npm 빌드가 스왑/OOM 사고를 냈던 것을 GHCR 경유 구조로 해소한 무스왑 설계다.
 
 ---
 
@@ -47,11 +47,12 @@ flowchart TD
 | `on.workflow_dispatch` | Actions 탭에서 수동 실행 | 코드 변경 없이 재배포 |
 | `concurrency` | 겹치는 배포 취소 | 동시 배포 충돌 방지 |
 | `job: test` | `checkout@v5` + `setup-java@v5`(JDK 21) + `./gradlew test` | 배포 전 품질 게이트(H2, 외부 의존 없음) |
-| `job: deploy` (`needs: test`) | `appleboy/ssh-action`으로 SSH 배포 | test 성공 후에만 실행 |
-| `command_timeout: 30m` | 원격 스크립트 최대 실행 시간 상향 | 기본 10m은 서버 빌드보다 짧아 "Run Command Timeout"으로 배포가 중단됐다 |
-| `envs:` | 앱 비밀값을 원격 셸로 전달 | 로그 노출 없이 `.env` 생성 |
-| `script:` | 코드 최신화(clone/`reset --hard origin/main`) 후 **`scripts/deploy.sh` 실행** — 5줄 | 워크플로는 접속만, 배포 로직은 셸 파일에 |
-| `scripts/deploy.sh` | `.env` 작성 → `board-db-net`·`mysql-8` 준비 + DB 응답 대기 → **스왑 보장 → 직렬 빌드(app→프론트) → `up -d --wait`** → `prune` | 실제 재배포 로직(저장소에 버전관리·주석 포함) |
+| `job: build` (`needs: test`) | buildx + **GHA 레이어 캐시**(`cache-from/to: type=gha`)로 이미지 3종 빌드 → **GHCR push**. 인증은 내장 `GITHUB_TOKEN`(`permissions.packages: write`) | 러너(RAM 7GB)가 빌드를 전담 → 서버 빌드 부하 0 |
+| `job: deploy` (`needs: build`) | `appleboy/ssh-action`으로 SSH 배포 | build 성공 후에만 실행 |
+| `command_timeout: 10m` | 원격 스크립트 최대 실행 시간 | 빌드가 CI로 이관돼 서버는 pull+기동만 — 10분이면 충분 |
+| `envs:` | 앱 비밀값 + `GHCR_USER`/`GHCR_TOKEN`을 원격 셸로 전달 | 로그 노출 없이 `.env` 생성·GHCR 로그인 |
+| `script:` | (git 없으면 `sudo dnf install -y git`) → 코드 최신화(clone/`reset --hard origin/main`) → **`scripts/deploy.sh` 실행** | 워크플로는 접속만, 배포 로직은 셸 파일에 |
+| `scripts/deploy.sh` | `.env` 작성 → `board-db-net`·`mysql-8` 준비 + DB 응답 대기 → **GHCR 로그인 → `docker compose pull` → `up -d --no-build --wait`** → logout → `prune` | 실제 재배포 로직(저장소에 버전관리·주석 포함). `--no-build`는 서버 빌드 금지의 안전핀 |
 | `--wait` (compose) | healthcheck 있는 서비스 3종이 **healthy가 될 때까지 대기**, 실패 시 exit≠0 → 배포 실패 | 별도 검증 루프 없이 DB·백엔드·프론트 정상 여부를 compose가 판정 |
 
 > [!NOTE]
@@ -68,8 +69,8 @@ flowchart TD
 | Secret 이름 | 값 | 설명 |
 |---|---|---|
 | `LIGHTSAIL_HOST` | `3.34.173.34` | Lightsail 인스턴스 공인 고정 IP |
-| `LIGHTSAIL_USER` | `ubuntu` | SSH 사용자(Ubuntu 블루프린트 기준) |
-| `LIGHTSAIL_SSH_KEY` | `webserver_key.pem` **전체 내용** | SSH 개인키(아래 §4-2 주의) |
+| `LIGHTSAIL_USER` | `ec2-user` | SSH 사용자(Amazon Linux 2023 기준) |
+| `LIGHTSAIL_SSH_KEY` | 서버 SSH 개인키(`.pem`, 현재 `ls_server_key.pem`) **전체 내용** | SSH 개인키(아래 §4-2 주의) |
 
 **필수(앱·DB용 — `.env`·mysql-8에 주입):**
 
@@ -92,7 +93,10 @@ flowchart TD
 | `APP_UPLOAD_DIR` | compose가 `/app/uploads` 로 강제(볼륨 마운트 지점) |
 
 > [!NOTE]
-> `deploy.yml` 은 Docker를 설치하지 않는다(서버에 미리 설치돼 있어야 함). 반면 `board-db-net` 네트워크와 `mysql-8` 컨테이너, 저장소 클론은 **없으면 스크립트가 자동 생성**한다(있으면 그대로 사용). 그래서 docker만 깔려 있으면 첫 push부터 배포가 완결된다.
+> `deploy.yml` 은 Docker를 설치하지 않는다(서버에 미리 설치돼 있어야 함). 반면 git 설치와 `board-db-net` 네트워크·`mysql-8` 컨테이너·저장소 클론은 **없으면 스크립트가 자동 처리**한다(있으면 그대로 사용). 그래서 docker만 깔려 있으면 첫 push부터 배포가 완결된다.
+
+> [!NOTE]
+> **GHCR push·pull 인증은 워크플로 내장 `GITHUB_TOKEN`이 전담한다 — 추가 Secret 불필요.** 러너의 push는 `docker/login-action`이, 서버의 pull은 `deploy.sh`의 `docker login ghcr.io`(단명 토큰)가 같은 토큰으로 처리하며, 근거는 `permissions.packages: write`다.
 
 ---
 
@@ -108,7 +112,7 @@ flowchart TD
 
 ### 4-2. SSH 키(`LIGHTSAIL_SSH_KEY`) 등록 시 주의
 
-`webserver_key.pem` 파일을 **줄바꿈 포함 전체**를 그대로 붙여넣는다. 즉:
+서버 SSH 개인키(`.pem`, 현재 `ls_server_key.pem`) 파일을 **줄바꿈 포함 전체**를 그대로 붙여넣는다. 즉:
 
 - 첫 줄인 `BEGIN ... PRIVATE KEY` 헤더 줄부터,
 - 마지막 줄인 `END ... PRIVATE KEY` 푸터 줄까지,
@@ -117,7 +121,7 @@ flowchart TD
 주의점:
 - 헤더/푸터 줄을 빠뜨리거나 여러 줄을 한 줄로 합치면 SSH 인증이 실패한다.
 - 이 키는 **절대 저장소에 커밋하지 않는다**(`.gitignore`의 `*.pem` 규칙으로 차단됨). Secret으로만 보관한다.
-- 파일 내용을 그대로 넣으려면 아래 §4-3의 `gh secret set ... < webserver_key.pem` 방식이 붙여넣기 실수를 피할 수 있어 더 안전하다.
+- 파일 내용을 그대로 넣으려면 아래 §4-3의 `gh secret set ... < ls_server_key.pem` 방식이 붙여넣기 실수를 피할 수 있어 더 안전하다.
 
 ### 4-3. CLI로 등록(선택)
 
@@ -125,8 +129,8 @@ flowchart TD
 
 ```bash
 gh secret set LIGHTSAIL_HOST --body "3.34.173.34"
-gh secret set LIGHTSAIL_USER --body "ubuntu"
-gh secret set LIGHTSAIL_SSH_KEY < webserver_key.pem     # 파일 내용을 그대로 주입(줄바꿈 보존)
+gh secret set LIGHTSAIL_USER --body "ec2-user"
+gh secret set LIGHTSAIL_SSH_KEY < ls_server_key.pem     # 서버 SSH 개인키(.pem) 내용을 그대로 주입(줄바꿈 보존)
 gh secret set KAKAO_REST_API --body "<값>"
 gh secret set KAKAO_SECRET --body "<값>"
 gh secret set GOOGLE_CLIENT_ID --body "<값>"
@@ -148,7 +152,7 @@ gh secret list        # 이름과 갱신 시각만 보인다(값은 다시 볼 �
 1. §3~§4로 Secret 7개 등록
 2. 서버 준비 완료([[DEPLOY-LIGHTSAIL]] §1~§8)
 3. `main`에 push(또는 Actions 탭에서 **Run workflow** 수동 실행)
-4. 저장소 **Actions** 탭에서 `test → deploy` 진행 로그 확인
+4. 저장소 **Actions** 탭에서 `test → build → deploy` 진행 로그 확인
 5. 성공 후 브라우저: `http://3.34.173.34` (React 메인, 80 — 포트 생략)
 
 > [!TIP]
@@ -165,5 +169,6 @@ gh secret list        # 이름과 갱신 시각만 보인다(값은 다시 볼 �
 | 앱 기동 실패(카카오 IllegalState) | `KAKAO_*` Secret 누락·오타 → `.env`가 빈 값으로 생성됨 |
 | test 잡 실패로 배포 안 됨 | 테스트가 실제로 깨진 것 → 로컬 `./gradlew test`로 재현·수정 |
 | 접속은 되나 80 응답 없음 | Lightsail 방화벽에 80 미개방([[DEPLOY-LIGHTSAIL]] §2) |
-| `Run Command Timeout`으로 deploy 중단 | 서버 빌드가 `command_timeout`(30m) 초과 — 매우 드묾. 인스턴스 성능 확인 |
-| 배포 중 서버 전체 무응답(80·22 모두) | 빌드 메모리 고갈 — deploy.sh가 스왑 2G·직렬 빌드로 방어하지만, 그래도 멈추면 Lightsail 콘솔(또는 `aws lightsail reboot-instance`)로 재부팅 후 재배포 |
+| `Run Command Timeout`으로 deploy 중단 | 빌드가 CI로 이관돼 `command_timeout: 10m`이면 충분하다(pull+기동만). 초과한다면 서버 네트워크 또는 GHCR 응답 지연을 확인 |
+| 배포 중 서버 전체 무응답(80·22 모두) | 서버 빌드 시절의 메모리 고갈 사고 — 빌드 이관(무스왑 전환)으로 소멸한 이력이다 |
+| GHCR pull 실패(unauthorized·denied) | 워크플로 `permissions.packages: write` 누락, 또는 서버 `docker login ghcr.io`(단명 `GITHUB_TOKEN`) 실패 → Actions 로그에서 로그인 단계 확인 |

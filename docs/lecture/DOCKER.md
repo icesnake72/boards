@@ -35,7 +35,7 @@ flowchart LR
 관련 파일: `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.env.example` (모두 저장소 루트).
 
 > [!NOTE]
-> 이 문서의 compose 예시는 도커화 **개념**(모드 A 자체완결 / 모드 B 기존 DB 브리지)을 설명하기 위한 것이다. 실제 커밋된 `docker-compose.yml`은 여기서 더 진화해 **프론트 2종(순수 JS·React)을 추가**하고, **백엔드(`board-app:8090`)의 host publish를 제거**(외부 비공개)했으며, **순수 JS 프론트를 host 80(공개 진입점)** 으로 노출한다. 전체 배포 구조는 [[FRONTEND-DEPLOY]]·[[DEPLOY-LIGHTSAIL]]를 참고한다.
+> 이 문서의 compose 예시는 도커화 **개념**(모드 A 자체완결 / 모드 B 기존 DB 브리지)을 설명하기 위한 것이다. 실제 커밋된 `docker-compose.yml`은 여기서 더 진화해 **프론트 2종(순수 JS·React)을 추가**하고, **백엔드(`board-app:8090`)의 host publish를 제거**(외부 비공개)했으며, **React 프론트를 host 80(공개 진입점·메인)**, 순수 JS 프론트를 8070(학습용)으로 노출한다. 또한 서비스별 이미지 태그가 `ghcr.io/icesnake72/*`(board-app·board-frontend·board-frontend-react)로 지정돼 있어, **production에서는 CI가 빌드해 push한 이미지를 서버가 pull만 한다**(무스왑 설계 — [[CICD-GITHUB-ACTIONS]]). `build:` 블록은 로컬 개발용으로 유지돼 로컬의 `docker compose up --build`는 그대로 동작한다. 전체 배포 구조는 [[FRONTEND-DEPLOY]]·[[DEPLOY-LIGHTSAIL]]를 참고한다.
 
 ---
 
