@@ -3,13 +3,13 @@ step: 15
 track: auth
 tags: [auth, redis, jwt, session]
 requires: ["[[REFRESH-TOKEN]]", "[[HTTPONLY-COOKIE]]", "[[JWT-AUTH]]"]
-status: 설계
+status: 완료
 ---
 
-# Redis 토큰 저장소 — refresh 이관 + access 즉시 폐기 (단계 15 · 설계안)
+# Redis 토큰 저장소 — refresh 이관 + access 즉시 폐기 (단계 15)
 
 - **과정명**: 강의용 Spring Boot 게시판 — 단계 15 (Redis 토큰 저장소)
-- **작성일**: 2026-08-29 · **상태**: 설계안 (구현 전)
+- **작성일**: 2026-08-29(설계) · 2026-08-29(구현 완료) · **상태**: 완료
 - **대상**: 단계 13(반응)까지 마치고 배포·보안 논의를 거친 수강생
 - **목표 두 가지**:
   1. **refresh token 저장소를 MySQL → Redis(TTL)로 이관** — 세션성 데이터를 성격에 맞는 저장소로 옮기고, 만료 검사·청소 로직을 TTL로 소멸시킨다
@@ -214,3 +214,22 @@ Testcontainers 대신 인터페이스+InMemory를 택한 이유: CI 러너에서
 4. `TokenDenylist` + 필터 통합 + logout 확장
 5. 엔티티·리포지토리 제거(주석 흔적), 테스트 전체 green
 6. verify-loop 통과 → E2E(로그아웃 즉시 401) → 배포 → 강의 문서(status 완료로 갱신)
+
+---
+
+## H. 구현·검증 기록 (2026-08-29)
+
+설계 그대로 구현되어 main에 머지·배포됐다(PR #6). 검증 결과:
+
+| 검증 | 결과 |
+|---|---|
+| 전체 테스트 | green — 계약 테스트(사용자당 1개·멱등)·denylist 필터·jti 신규 포함, 기존 auth 테스트는 InMemory 대체로 무수정 통과 |
+| verify.sh | PASSED (빌드+테스트+실기동) |
+| 로컬 Redis E2E | 로그인 → 로그아웃 → **같은 access 즉시 401**. `rt:user:{id}` TTL=1209600s(14일), `deny:{jti}` TTL=3598s(잔여수명) 실측 |
+| production E2E | 가입 201 → 로그인 200 → 로그아웃 204 → **같은 access 401** → 옛 refresh 401 |
+| 무스왑 유지 | 배포 후 서버 Swap 0B, redis 컨테이너 healthy |
+
+**구현 중 발견한 함정(교육 포인트)**: 백엔드 컨테이너만 재생성되는 배포(GHCR pull)에서
+떠 있던 Nginx가 옛 컨테이너 IP를 캐시해 502가 났다. `proxy_pass`의 정적 호스트명은
+기동 시 1회만 해석되기 때문 — `resolver 127.0.0.11` + 변수(`set $backend ...`)로
+요청마다 재해석하도록 두 프론트의 nginx.conf를 수정해 해결했다([[FRONTEND-DEPLOY]] 참고).
