@@ -4,6 +4,8 @@ import com.example.board.auth.dto.LoginRequest;
 import com.example.board.auth.dto.SignupRequest;
 import com.example.board.auth.dto.TokenPair;
 import com.example.board.auth.jwt.JwtTokenProvider;
+import com.example.board.auth.token.RefreshTokenStore;
+import com.example.board.auth.token.TokenDenylist;
 import com.example.board.global.exception.DuplicateException;
 import com.example.board.global.exception.ErrorCode;
 import com.example.board.global.exception.UnauthorizedException;
@@ -13,7 +15,6 @@ import com.example.board.user.Role;
 import com.example.board.user.User;
 import com.example.board.user.UserRepository;
 import com.example.board.user.dto.UserResponse;
-import java.time.LocalDateTime;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -31,7 +32,9 @@ public class AuthService {
 
   private final UserRepository userRepository;
   private final UserProfileRepository userProfileRepository;
-  private final RefreshTokenRepository refreshTokenRepository;
+  // 단계 15 처리에 의해 제거: RefreshTokenRepository(JPA) → RefreshTokenStore(Redis, TTL)
+  private final RefreshTokenStore refreshTokenStore;
+  private final TokenDenylist tokenDenylist;
   private final PasswordEncoder passwordEncoder;
   private final JwtTokenProvider tokenProvider;
   private final AuthenticationManager authenticationManager;
@@ -100,15 +103,13 @@ public class AuthService {
   // 강의 포인트: refresh token으로는 새 access token만 재발급한다(stateful 검증).
   // refresh token 자체가 자격증명이므로 별도 인증 없이 호출된다(SecurityConfig에서 /auth/** 공개).
   // refresh token은 회전(rotation)하지 않고 만료 전까지 그대로 둔다 — 회전은 후속 주제.
-  @Transactional
+  @Transactional(readOnly = true)
   public TokenPair reissue(String refreshToken) {
-    RefreshToken stored = refreshTokenRepository.findByToken(refreshToken)
+    // 단계 15: 만료 분기(isExpired → EXPIRED_REFRESH_TOKEN)가 소멸했다 —
+    // TTL이 지나면 키 자체가 사라지므로 "없음 = 무효" 한 가지로 단순해진다.
+    Long userId = refreshTokenStore.findUserId(refreshToken)
         .orElseThrow(() -> new UnauthorizedException(ErrorCode.INVALID_REFRESH_TOKEN));
-    if (stored.isExpired()) {
-      refreshTokenRepository.delete(stored);
-      throw new UnauthorizedException(ErrorCode.EXPIRED_REFRESH_TOKEN);
-    }
-    User user = userRepository.findById(stored.getUserId())
+    User user = userRepository.findById(userId)
         .orElseThrow(() -> new UnauthorizedException(ErrorCode.INVALID_REFRESH_TOKEN));
     String newAccessToken = tokenProvider.createToken(user.getUsername());
     // access token만 새로 발급한다. refresh token은 회전하지 않고 기존 값을 그대로 돌려준다.
@@ -116,22 +117,24 @@ public class AuthService {
         newAccessToken, refreshToken, accessTokenValiditySeconds, refreshTokenValiditySeconds);
   }
 
-  // 서버 측 refresh token을 삭제한다. 이미 없어도 예외 없이 통과(idempotent).
-  @Transactional
-  public void logout(String refreshToken) {
-    refreshTokenRepository.findByToken(refreshToken)
-        .ifPresent(refreshTokenRepository::delete);
+  // 로그아웃 = refresh 폐기 + access "즉시" 폐기(단계 15).
+  // 기존에는 access가 만료(최대 1시간)까지 유효했지만, 이제 jti를 남은 수명만큼 denylist에
+  // 등록해 다음 요청부터 401이 된다. 두 삭제 모두 이미 없어도 조용히 통과(멱등).
+  public void logout(String refreshToken, String accessToken) {
+    if (refreshToken != null) {
+      refreshTokenStore.deleteByToken(refreshToken);
+    }
+    if (accessToken != null && tokenProvider.validateToken(accessToken)) {
+      tokenDenylist.deny(
+          tokenProvider.getJti(accessToken), tokenProvider.getRemainingSeconds(accessToken));
+    }
   }
 
-  // opaque 랜덤 토큰(UUID)을 만들어 한 사용자당 하나로 저장한다 — 기존이 있으면 교체, 없으면 새로 생성.
-  // 평문 UUID 저장은 강의 단순화. 운영에선 해시 저장을 권장한다.
+  // opaque 랜덤 토큰(UUID)을 만들어 한 사용자당 하나로 저장한다 — 기존이 있으면 교체.
+  // 만료는 저장소의 TTL이 관리한다(단계 15). 평문 UUID 저장은 강의 단순화 — 운영에선 해시 권장.
   private String issueRefreshToken(Long userId) {
     String token = UUID.randomUUID().toString();
-    LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(refreshTokenValiditySeconds);
-    refreshTokenRepository.findByUserId(userId)
-        .ifPresentOrElse(
-            existing -> existing.update(token, expiresAt),
-            () -> refreshTokenRepository.save(new RefreshToken(userId, token, expiresAt)));
+    refreshTokenStore.save(userId, token, refreshTokenValiditySeconds);
     return token;
   }
 }

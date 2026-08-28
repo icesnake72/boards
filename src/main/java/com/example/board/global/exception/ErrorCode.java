@@ -34,6 +34,7 @@ public enum ErrorCode {
   LOGIN_REQUIRED(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다."),
   LOGIN_FAILED(HttpStatus.UNAUTHORIZED, "username 또는 password가 올바르지 않습니다."),
   INVALID_REFRESH_TOKEN(HttpStatus.UNAUTHORIZED, "유효하지 않은 refresh token입니다."),
+  // 단계 15 처리에 의해 미사용 — TTL 만료 시 키가 사라져 "없음=무효(INVALID)"로 단일화됨. 교육용으로 상수는 보존.
   EXPIRED_REFRESH_TOKEN(HttpStatus.UNAUTHORIZED, "만료된 refresh token입니다. 다시 로그인하세요."),
   INVALID_INPUT(HttpStatus.BAD_REQUEST, "입력값이 올바르지 않습니다."),
   // 단계 11: 댓글/대댓글 — 1단계 깊이 불변식과 삭제된 댓글에 대한 제약을 별도 코드로 구분한다.

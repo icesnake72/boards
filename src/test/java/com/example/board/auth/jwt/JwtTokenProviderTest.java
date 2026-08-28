@@ -41,4 +41,22 @@ class JwtTokenProviderTest {
   void should_returnFalse_whenTokenMalformed() {
     assertThat(provider.validateToken("not-a-jwt")).isFalse();
   }
+
+  // 단계 15: 토큰마다 고유 jti가 발급된다 — denylist의 키
+  @Test
+  void should_issueUniqueJti_perToken() {
+    String t1 = provider.createToken("tester");
+    String t2 = provider.createToken("tester");
+    org.assertj.core.api.Assertions.assertThat(provider.getJti(t1)).isNotBlank();
+    org.assertj.core.api.Assertions.assertThat(provider.getJti(t1))
+        .isNotEqualTo(provider.getJti(t2));
+  }
+
+  // 단계 15: 남은 유효초는 denylist TTL로 쓰인다 — 0 < remaining ≤ 설정값
+  @Test
+  void should_returnRemainingSeconds_withinValidity() {
+    String token = provider.createToken("tester");
+    long remaining = provider.getRemainingSeconds(token);
+    org.assertj.core.api.Assertions.assertThat(remaining).isPositive().isLessThanOrEqualTo(3600);
+  }
 }
