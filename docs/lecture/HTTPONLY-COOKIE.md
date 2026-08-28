@@ -175,6 +175,9 @@ public ResponseEntity<Void> logout(
 
 > 로그아웃은 **양쪽**을 지운다: 서버 DB의 refresh token(재발급 차단) + 클라이언트 쿠키(`Max-Age=0`으로 즉시 만료).
 
+> [!NOTE]
+> **후기 — 단계 15에서 확장**: 단계 15부터 logout은 쿠키의 refresh와 함께 **Authorization 헤더의 access token도** 받아 즉시 폐기한다(`logout(refreshToken, accessToken)` — jti를 Redis denylist에 잔여수명 TTL로 등록). 쿠키 정책·전달 채널은 그대로다. 상세: [[REDIS-TOKEN]].
+
 ## 6. 관심사 분리 — TokenPair
 
 서비스는 토큰을 **생성**만 하고, **전달 매체(본문 vs 쿠키)는 컨트롤러**가 정한다.

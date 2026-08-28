@@ -118,6 +118,9 @@ Optional<RefreshToken> findByToken(String token);    // 재발급/로그아웃 �
 Optional<RefreshToken> findByUserId(Long userId);    // 로그인 시 기존 토큰 교체
 ```
 
+> [!NOTE]
+> **후기 — 단계 15에서 저장소 이관**: 저장소가 MySQL → **Redis(TTL 14일)** 로 이관되어 `RefreshToken` 엔티티·`RefreshTokenRepository`·`refresh_tokens` 테이블은 삭제됐고, 만료 검사(`isExpired`)와 `EXPIRED_REFRESH_TOKEN` 분기도 TTL로 대체됐다(TTL이 지나면 키 자체가 사라져 "없음 = `INVALID_REFRESH_TOKEN`" 하나로 단일화). 이 문서의 코드는 단계 4 시점 스냅샷으로 보존한다. 상세: [[REDIS-TOKEN]].
+
 ## 5. 흐름 — 코드로 보기
 
 ### 5-1. 로그인 — 두 토큰 발급

@@ -64,6 +64,11 @@ server {
   listen 80;
   server_name _;
 
+  # 변수 proxy_pass를 위한 도커 내장 DNS. 정적 proxy_pass는 기동 시 1회만 IP를 해석해
+  # 백엔드만 재생성되는 배포 후 502가 난다(§7-2) — 변수를 쓰면 요청마다 재해석한다.
+  resolver 127.0.0.11 valid=10s ipv6=off;
+  set $backend board-app:8090;
+
   root /usr/share/nginx/html;
   index index.html;
 
@@ -72,7 +77,7 @@ server {
   }
 
   location /api/ {
-    proxy_pass http://board-app:8090;   # 뒤에 경로(/)를 붙이지 않아 원본 URI 그대로 전달
+    proxy_pass http://$backend;         # 뒤에 경로(/)를 붙이지 않아 원본 URI 그대로 전달
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -82,10 +87,11 @@ server {
 }
 ```
 
-핵심 두 가지:
+핵심 세 가지:
 
-- **`proxy_pass http://board-app:8090;` 에 경로를 붙이지 않는다.** 붙이면(`.../`) `/api/` 접두어가 잘려 백엔드 라우트(`/api/v1/...`)와 어긋난다. 경로 없이 두면 원본 URI(`/api/v1/boards`)가 그대로 전달된다.
-- **`board-app` 은 컨테이너명**이다. 같은 docker 네트워크(`board-db-net`)에 있으면 docker DNS가 이 이름을 백엔드 컨테이너 IP로 해석한다.
+- **`proxy_pass http://$backend;` 에 경로를 붙이지 않는다.** 붙이면(`.../`) `/api/` 접두어가 잘려 백엔드 라우트(`/api/v1/...`)와 어긋난다. 경로 없이 두면 원본 URI(`/api/v1/boards`)가 그대로 전달된다.
+- **`$backend`의 값 `board-app:8090`에서 `board-app`은 컨테이너명**이다. 같은 docker 네트워크(`board-db-net`)에 있으면 docker DNS가 이 이름을 백엔드 컨테이너 IP로 해석한다.
+- **호스트명을 정적으로 쓰지 않고 `resolver` + 변수로 둔다.** 백엔드 컨테이너만 재생성되는 배포 후 옛 IP를 계속 쓰는 502 함정을 피하기 위해서다 — 자세한 발견 경위와 원리는 §7-2.
 
 > [!NOTE]
 > 실제 배포에선 두 프론트의 `nginx.conf` 모두 `/api/` 외에 **`/oauth2/`·`/login/oauth2/`도 백엔드로 프록시**한다. 백엔드가 비공개라, 소셜 로그인 개시·콜백을 프론트가 대신 중계해야 브라우저가 로그인 흐름을 탈 수 있기 때문이다(`X-Forwarded-Host`로 백엔드의 `redirect_uri`를 공개 주소로 맞춘다). 상세는 [[DEPLOY-LIGHTSAIL]] §10 참고. 메인 진입점인 **React 프론트(`frontend-react/`, 80)의 Nginx도 동일한 oauth 프록시를 가지며**, 순수 JS 프론트(8070)와 같은 프록시 구조다.
@@ -157,13 +163,23 @@ docker compose ps                   # 상태 확인
 
 ---
 
-## 7. 함정 메모 — 헬스체크 `localhost`는 IPv6로 샌다
+## 7. 함정 메모
+
+### 7-1. 헬스체크 `localhost`는 IPv6로 샌다
 
 처음엔 헬스체크를 `wget http://localhost/`로 뒀더니 계속 `starting`에서 멈추고 `Connection refused`가 났다. 원인:
 
 > 컨테이너 안에서 `localhost`는 **`::1`(IPv6)로 먼저 해석**되는데, Nginx는 `listen 80;`(IPv4)만 바인딩한다 → IPv6로 연결 시도 → 거부.
 
 호스트에서 `curl localhost:8070`은 잘 되므로 헷갈리기 쉽다(호스트→컨테이너 포워딩은 IPv4). **컨테이너 내부 헬스체크는 `http://127.0.0.1/`로 명시**해 해결했다. (대안: nginx에 `listen [::]:80;`도 추가.)
+
+### 7-2. 백엔드만 재생성되는 배포 후 502
+
+단계 15 배포에서 발견했다([[REDIS-TOKEN]] §H). GHCR pull 배포로 **백엔드 컨테이너만 재생성**되자, 멀쩡히 떠 있는 프론트가 `/api` 요청마다 502를 냈다. 원인:
+
+> `proxy_pass http://board-app:8090;` 처럼 호스트명을 **정적으로** 쓰면 nginx는 **기동 시 1회만** DNS를 해석해 IP를 캐시한다. 백엔드가 재생성되며 새 IP를 받으면 nginx는 여전히 옛 IP로 연결을 시도한다 → 502.
+
+**`resolver 127.0.0.11`(도커 내장 DNS) + `set $backend ...` 변수 + `proxy_pass http://$backend`** 로 바꿔 해결했다(§3) — proxy_pass에 변수가 들어가면 nginx가 요청마다 resolver로 재해석해 새 IP를 따라간다. 프론트 재기동 없이 백엔드만 갈아끼우는 배포가 안전해진다.
 
 ---
 
@@ -293,6 +309,10 @@ frontend/       (빌드 없음, 원본 그대로)      frontend-react/ (Vite 빌
 
 ```nginx
 listen 80;
+
+resolver 127.0.0.11 valid=10s ipv6=off;   # 두 파일 모두 동일(변수 proxy_pass용 — §7-2)
+set $backend board-app:8090;
+
 root /usr/share/nginx/html;
 index index.html;
 
@@ -301,7 +321,7 @@ location / {
 }
 
 location /api/ {
-  proxy_pass http://board-app:8090;   # 두 파일 모두 동일(경로 미부착 → 원본 URI 유지)
+  proxy_pass http://$backend;         # 두 파일 모두 동일(경로 미부착 → 원본 URI 유지)
   proxy_set_header Host $host;
   proxy_set_header X-Real-IP $remote_addr;
   proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

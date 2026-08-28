@@ -25,6 +25,7 @@ flowchart LR
   GHCR -->|"docker compose pull"| LS
   subgraph LS["Lightsail 인스턴스"]
     APP["board-app :8090 (내부 전용·비공개)"] -->|"board-db-net"| DB[("mysql-8 : board (비공개)")]
+    APP -->|"board-db-net"| REDIS[("board-redis · 토큰 저장소 (비공개)")]
     FE1["board-frontend :8070 학습용"] -->|"/api·/oauth2 프록시"| APP
     FE2["board-frontend-react :80 메인"] -->|"/api·/oauth2 프록시"| APP
   end
@@ -32,6 +33,7 @@ flowchart LR
 ```
 
 - **공개 진입점은 프론트뿐이다.** **React 프론트가 host 80(공개 진입점·메인)** 이고, 순수 JS 프론트는 **8070**(학습·비교용 — 방화벽을 열지 않으면 외부에서 접근 불가)이다. 기존 8071 포트는 폐지됐다. 백엔드(`board-app:8090`)와 DB(`mysql-8`)는 **host에 포트를 publish하지 않아 외부에서 직접 접근할 수 없고**, board-db-net 안에서 프론트의 Nginx만 컨테이너명 `board-app:8090`으로 프록시한다.
+- **board-redis**(단계 15 — 토큰 저장소: refresh TTL + access denylist)도 compose가 pull·기동한다. host publish 없이 board-db-net 안에서만 접근되는 비공개 컨테이너이며, `maxmemory 64mb`·`noeviction`으로 2GB 인스턴스 예산에 맞췄다. 상세: [[REDIS-TOKEN]].
 - **소셜 로그인**은 메인 진입점인 React 프론트(80)의 Nginx가 `/oauth2/`·`/login/oauth2/`까지 백엔드로 중계한다(§10 참고). 순수 JS 프론트(8070)의 Nginx도 동일한 oauth 프록시 구성을 유지한다.
 - **빌드는 CI에서, 서버는 pull + 실행만(무스왑)**: 이미지 3종은 GitHub Actions 러너가 빌드해 ghcr.io에 push하고, 서버는 `docker compose pull` 후 기동만 한다 — 2GB 인스턴스에서 gradle/npm 빌드 부하가 사라져 스왑 없이 안전하다.
 
@@ -157,8 +159,8 @@ nano .env    # KAKAO_REST_API / KAKAO_SECRET / GOOGLE_* 실제 값 입력
 ## 8. 최초 수동 기동 (검증)
 
 ```bash
-docker compose up -d --build      # app + frontend + frontend-react
-docker compose ps                 # 세 컨테이너 healthy 확인
+docker compose up -d --build      # app + frontend + frontend-react + redis(board-redis)
+docker compose ps                 # 네 컨테이너 healthy 확인 (board-redis 포함)
 # 백엔드는 host에 publish하지 않으므로 localhost:8090 직접 호출은 동작하지 않는다.
 # 공개 진입점(80)의 프론트를 거쳐 프록시로 확인한다.
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost/               # 프론트 정적 → 200 기대
@@ -179,7 +181,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/api/v1/boards  # /api 
 
 1. 테스트 실행(H2)
 2. **build 잡**: 이미지 3종(board-app·board-frontend·board-frontend-react)을 러너에서 빌드해 GHCR(ghcr.io)에 push — 서버 빌드 부하 0
-3. Lightsail에 SSH 접속 → (없으면) git 자동 설치·저장소 clone, board-db-net·mysql-8 자동 생성 → `.env` 재생성 → mysql-8 준비 대기 → **GHCR 로그인 → `docker compose pull` → `up -d --no-build --wait`** — healthcheck 있는 서비스 전부가 healthy가 될 때까지 대기하고, 하나라도 실패하면 배포가 실패한다(이것이 배포 검증의 전부).
+3. Lightsail에 SSH 접속 → (없으면) git 자동 설치·저장소 clone, board-db-net·mysql-8 자동 생성 → `.env` 재생성 → mysql-8 준비 대기 → **GHCR 로그인 → `docker compose pull` → `up -d --no-build --wait`** — healthcheck 있는 서비스 전부가 healthy가 될 때까지 대기하고, 하나라도 실패하면 배포가 실패한다(이것이 배포 검증의 전부). board-redis(비공개 토큰 저장소)도 이 compose가 함께 pull·기동한다.
 
 를 자동 수행한다. 필요한 Secret 항목과 등록 방법은 [[CICD-GITHUB-ACTIONS]] 문서를 따른다.
 
@@ -209,6 +211,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/api/v1/boards  # /api 
 | 브라우저에서 80 접속 불가 | Lightsail 방화벽(§2)에 80 미개방 |
 | `curl localhost:8090` 응답 없음 | 정상이다 — 백엔드는 host에 publish하지 않는다. `curl localhost/api/v1/boards`(프론트 프록시)로 확인(§8) |
 | 앱이 DB 연결 실패(Communications link) | mysql-8 미기동 또는 board-db-net 미연결(§5) |
+| 로그인/로그아웃 등 인증 API가 500 | board-redis 다운 — 토큰 저장소는 fail-closed 설계라 Redis 장애를 우회하지 않는다 → `docker compose ps`로 board-redis 상태 확인 |
 | 구글 로그인이 콘솔에서 거부됨 | 구글은 http redirect_uri 불가 → HTTPS 전환 필요(§10). 카카오는 http 허용 |
 | 소셜 로그인 후 redirect_uri 불일치 | 카카오/구글 콘솔의 Redirect URI를 `http://3.34.173.34/login/oauth2/code/*` 로 등록(§10) |
 | 배포 중 OOM/무응답(과거 사고) | 서버 빌드 시절의 사고 — **서버는 더 이상 빌드하지 않으므로 빌드발 메모리 사고 자체가 소멸**했다(첫 콜드 배포 실측 피크 used 1017M·avail 715M·Swap 0B, pull+기동만 ~380MB 증가). 그래도 인스턴스가 멈추면 Lightsail 콘솔 또는 `aws lightsail reboot-instance`로 재부팅 후 재배포 |

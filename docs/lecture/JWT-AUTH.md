@@ -248,6 +248,9 @@ public void logout() {
 
 > **비교 포인트**: 로그인 검증 로직은 그대로다. 바뀐 건 "성공 후 무엇을 주느냐"뿐 — 세션 키냐, 서명된 토큰이냐.
 
+> [!NOTE]
+> **후기 — 단계 15에서 해소**: "stateless라 강제 무효화 불가, 블랙리스트는 후속 주제"라던 이 한계는 [[REDIS-TOKEN]](단계 15)에서 **jti 클레임 + Redis denylist**로 해소됐다 — 로그아웃하면 access token도 즉시 401이다. 단계 2 시점 코드에는 jti 클레임이 없었다 — 현재 `createToken`은 `.id(UUID.randomUUID().toString())`(jti)를 포함한다.
+
 ---
 
 ### Step 4. `JwtAuthenticationFilter` — 들어온 토큰을 **검증**한다

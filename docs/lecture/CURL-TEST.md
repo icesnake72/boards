@@ -279,7 +279,7 @@ curl -i -X DELETE $B/posts/1 -H "Authorization: Bearer $TOKEN"
 
 ---
 
-## 6. 로그아웃 (stateless)
+## 6. 로그아웃
 
 ```bash
 curl -i -X POST $B/auth/logout -H "Authorization: Bearer $TOKEN"
@@ -287,7 +287,9 @@ curl -i -X POST $B/auth/logout -H "Authorization: Bearer $TOKEN"
 
 **기대**: `204 No Content`
 
-> **단계 1과의 차이**: 세션 방식은 `invalidate()`로 서버 세션을 지웠다. JWT는 서버에 상태가 없어 **할 일이 없다** — 실제 로그아웃은 클라이언트가 토큰을 버리는 것이다. (로그아웃 후에도 폐기 전까지 토큰 자체는 만료 시각까지 유효 — 강제 무효화는 단계 3의 블랙리스트 주제)
+> **단계 15부터**: `Authorization` 헤더를 주면 access token이 **즉시 폐기**된다(jti가 Redis denylist에 등록 — 이후 같은 토큰은 401). 헤더는 예전처럼 optional이라 안 주면 refresh만 폐기된다 — 동봉을 권장한다.
+
+> **단계 1과의 차이**: 세션 방식은 `invalidate()`로 서버 세션을 지웠다. JWT는 원래 서버에 상태가 없어 할 일이 없었지만, 단계 15부터는 위처럼 denylist로 **강제 무효화**까지 된다([[REDIS-TOKEN]]).
 
 ---
 
@@ -523,7 +525,7 @@ refresh token은 httpOnly 쿠키라 **curl은 값을 알 수 없다**(그게 목
 await fetch('/api/v1/auth/reissue', {method: 'POST'}).then(r => r.json())
 // → {accessToken: "eyJ...", tokenType: "Bearer", expiresIn: 3600}
 
-// 로그아웃 — 서버 DB의 refresh 삭제 + 쿠키 만료
+// 로그아웃 — 서버 저장소(Redis)의 refresh 삭제 + 쿠키 만료
 await fetch('/api/v1/auth/logout', {method: 'POST'}).then(r => r.status)  // 204
 ```
 
