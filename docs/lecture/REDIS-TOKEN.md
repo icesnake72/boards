@@ -208,6 +208,8 @@ Testcontainers 대신 인터페이스+InMemory를 택한 이유: CI 러너에서
 
 ## G. 구현 순서 (다음 세션 로드맵)
 
+> 각 순서의 **파일별 실제 수정 코드(전/후)와 체크포인트**는 [[REDIS-TOKEN-WALKTHROUGH]]에 기록되어 있다.
+
 1. 의존성·설정·compose(redis) — 기동 확인
 2. `JwtTokenProvider` jti 추가(+기존 테스트 보강)
 3. `RefreshTokenStore` 인터페이스 + InMemory + Redis 구현, `AuthService` 교체 — 기존 auth 테스트 green 유지
