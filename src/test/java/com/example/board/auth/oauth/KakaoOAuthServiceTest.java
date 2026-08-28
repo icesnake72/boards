@@ -3,7 +3,7 @@ package com.example.board.auth.oauth;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.BDDMockito.given;
 
-import com.example.board.auth.RefreshTokenRepository;
+import com.example.board.auth.token.RefreshTokenStore;
 import com.example.board.auth.dto.TokenPair;
 import com.example.board.auth.jwt.JwtTokenProvider;
 import com.example.board.auth.oauth.dto.KakaoTokenResponse;
@@ -37,7 +37,7 @@ class KakaoOAuthServiceTest {
   UserProfileRepository userProfileRepository;
 
   @Autowired
-  RefreshTokenRepository refreshTokenRepository;
+  RefreshTokenStore refreshTokenStore;   // 단계 15: JPA 리포지토리 → 저장소 인터페이스(InMemory 대체)
 
   @Autowired
   PasswordEncoder passwordEncoder;
@@ -75,8 +75,8 @@ class KakaoOAuthServiceTest {
 
     // 발급된 access token은 우리 서비스의 JWT다 — subject가 username이어야 한다
     assertThat(tokenProvider.getUsername(tokens.accessToken())).isEqualTo(user.getUsername());
-    // refresh token도 로컬 로그인과 같은 경로로 DB에 저장된다
-    assertThat(refreshTokenRepository.findByToken(tokens.refreshToken())).isPresent();
+    // refresh token도 로컬 로그인과 같은 경로로 저장소에 저장된다 (단계 15: Redis/InMemory)
+    assertThat(refreshTokenStore.findUserId(tokens.refreshToken())).isPresent();
   }
 
   @Test

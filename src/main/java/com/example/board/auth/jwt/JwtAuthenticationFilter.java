@@ -1,6 +1,7 @@
 package com.example.board.auth.jwt;
 
 import com.example.board.auth.CustomUserDetailsService;
+import com.example.board.auth.token.TokenDenylist;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -28,6 +29,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
   private final JwtTokenProvider tokenProvider;
   private final CustomUserDetailsService userDetailsService;
+  // 단계 15: 폐기된 access token(로그아웃 등)을 즉시 거부하기 위한 denylist 조회
+  private final TokenDenylist tokenDenylist;
   // 필터 단계에서 발생한 "내부 오류"를 DispatcherServlet 예외 처리로 위임하기 위한 리졸버.
   // 필터는 @RestControllerAdvice(GlobalExceptionHandler)의 사각지대라, 이걸 거쳐야 일관된 500 응답이 된다.
   private final HandlerExceptionResolver handlerExceptionResolver;
@@ -36,9 +39,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
   public JwtAuthenticationFilter(
       JwtTokenProvider tokenProvider,
       CustomUserDetailsService userDetailsService,
+      TokenDenylist tokenDenylist,
       @Qualifier("handlerExceptionResolver") HandlerExceptionResolver handlerExceptionResolver) {
     this.tokenProvider = tokenProvider;
     this.userDetailsService = userDetailsService;
+    this.tokenDenylist = tokenDenylist;
     this.handlerExceptionResolver = handlerExceptionResolver;
   }
 
@@ -51,7 +56,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
       throws ServletException, IOException {
     try {
       String token = resolveToken(request);
-      if (token != null && tokenProvider.validateToken(token)) {
+      // 단계 15: 서명·만료 검증 통과 후 denylist(폐기 목록)도 확인한다.
+      // 폐기된 토큰이면 컨텍스트를 심지 않고 통과 → 뒷단 entryPoint가 401 (기존 "막지 않는" 설계 유지).
+      // Redis 장애 시 여기서 예외 → 아래 내부 오류 분기(500, fail-closed) — denylist를 우회할 수 없다.
+      if (token != null && tokenProvider.validateToken(token)
+          && !tokenDenylist.isDenied(tokenProvider.getJti(token))) {
         // 토큰의 username으로 UserDetails를 로딩해 표준 Authentication을 만들어 컨텍스트에 저장한다
         String username = tokenProvider.getUsername(token);
         UserDetails userDetails = userDetailsService.loadUserByUsername(username);

@@ -3,6 +3,10 @@ package com.example.board.auth;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.example.board.auth.token.InMemoryRefreshTokenStore;
+import com.example.board.auth.token.InMemoryTokenDenylist;
+import com.example.board.auth.token.RefreshTokenStore;
+import com.example.board.auth.token.TokenDenylist;
 import com.example.board.auth.dto.LoginRequest;
 import com.example.board.auth.dto.SignupRequest;
 import com.example.board.auth.dto.TokenPair;
@@ -15,8 +19,7 @@ import com.example.board.user.Role;
 import com.example.board.user.User;
 import com.example.board.user.UserRepository;
 import com.example.board.user.dto.UserResponse;
-import java.time.LocalDateTime;
-import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -42,8 +45,19 @@ class AuthServiceTest {
   @Autowired
   JwtTokenProvider tokenProvider;
 
+  // 단계 15: RefreshTokenRepository(JPA) → RefreshTokenStore/TokenDenylist (테스트에선 InMemory 대체)
   @Autowired
-  RefreshTokenRepository refreshTokenRepository;
+  RefreshTokenStore refreshTokenStore;
+
+  @Autowired
+  TokenDenylist tokenDenylist;
+
+  // @Transactional 롤백은 인메모리 저장소를 되돌리지 못하므로 테스트마다 직접 비운다
+  @BeforeEach
+  void clearTokenStores() {
+    ((InMemoryRefreshTokenStore) refreshTokenStore).clear();
+    ((InMemoryTokenDenylist) tokenDenylist).clear();
+  }
 
   @Test
   void should_createUserAndProfile_whenSignup() {
@@ -105,9 +119,8 @@ class AuthServiceTest {
     TokenPair tokens = authService.login(new LoginRequest("tester1", "password123"));
 
     assertThat(tokens.refreshToken()).isNotBlank();
-    RefreshToken stored = refreshTokenRepository.findByUserId(userId).orElseThrow();
-    assertThat(stored.getToken()).isEqualTo(tokens.refreshToken());
-    assertThat(stored.isExpired()).isFalse();
+    // 단계 15: 저장소가 토큰→사용자 매핑을 보관한다 (만료는 TTL 관할이라 검사 항목이 아님)
+    assertThat(refreshTokenStore.findUserId(tokens.refreshToken())).contains(userId);
   }
 
   @Test
@@ -119,9 +132,8 @@ class AuthServiceTest {
     String second = authService.login(new LoginRequest("tester1", "password123")).refreshToken();
 
     assertThat(second).isNotEqualTo(first);
-    assertThat(refreshTokenRepository.findByToken(first)).isEmpty();
-    RefreshToken stored = refreshTokenRepository.findByUserId(userId).orElseThrow();
-    assertThat(stored.getToken()).isEqualTo(second);
+    assertThat(refreshTokenStore.findUserId(first)).isEmpty();     // 옛 토큰은 즉시 무효(사용자당 1개)
+    assertThat(refreshTokenStore.findUserId(second)).contains(userId);
   }
 
   @Test
@@ -143,34 +155,24 @@ class AuthServiceTest {
         .hasFieldOrPropertyWithValue("errorCode", ErrorCode.INVALID_REFRESH_TOKEN);
   }
 
-  @Test
-  void should_throwExpiredRefreshToken_whenRefreshTokenExpired() {
-    User user = userRepository.save(new User(
-        "tester1", "tester1@example.com", passwordEncoder.encode("password123"), Role.USER));
-    String expiredToken = UUID.randomUUID().toString();
-    refreshTokenRepository.save(
-        new RefreshToken(user.getId(), expiredToken, LocalDateTime.now().minusSeconds(1)));
-
-    assertThatThrownBy(() -> authService.reissue(expiredToken))
-        .isInstanceOf(UnauthorizedException.class)
-        .hasFieldOrPropertyWithValue("errorCode", ErrorCode.EXPIRED_REFRESH_TOKEN);
-    assertThat(refreshTokenRepository.findByToken(expiredToken)).isEmpty();
-  }
+  // 단계 15 처리에 의해 제거: should_throwExpiredRefreshToken — TTL이 만료를 관할하므로
+  // "만료된 토큰 = 키 부재 = INVALID_REFRESH_TOKEN"으로 단일화됐다(위 not-found 테스트가 그 경로).
 
   @Test
-  void should_deleteRefreshToken_whenLogout() {
+  void should_deleteRefreshAndDenyAccess_whenLogout() {
     authService.signup(new SignupRequest("tester1", "tester1@example.com", "password123", "테스터"));
-    String refreshToken =
-        authService.login(new LoginRequest("tester1", "password123")).refreshToken();
+    TokenPair tokens = authService.login(new LoginRequest("tester1", "password123"));
 
-    authService.logout(refreshToken);
+    authService.logout(tokens.refreshToken(), tokens.accessToken());
 
-    assertThat(refreshTokenRepository.findByToken(refreshToken)).isEmpty();
+    assertThat(refreshTokenStore.findUserId(tokens.refreshToken())).isEmpty();
+    // 단계 15 핵심: access token이 만료 전이라도 "즉시" 폐기 목록에 오른다
+    assertThat(tokenDenylist.isDenied(tokenProvider.getJti(tokens.accessToken()))).isTrue();
   }
 
   @Test
   void should_notThrow_whenLogoutWithUnknownToken() {
-    authService.logout("no-such-token");
+    authService.logout("no-such-token", null);
   }
 
   @Test

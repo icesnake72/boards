@@ -22,6 +22,9 @@ services:
       dockerfile: Dockerfile
     image: ghcr.io/icesnake72/board-app:latest        # CI가 빌드·push, 서버는 pull만
     container_name: board-app
+    depends_on:
+      redis:
+        condition: service_healthy   # 단계 15: 토큰 저장소가 준비된 뒤 앱 시작
     env_file:
       - .env                          # KAKAO_*/GOOGLE_* 주입 (기동 필수 — 위 주석 참고)
     environment:
@@ -32,6 +35,7 @@ services:
       DB_USERNAME: ${DB_USERNAME:-root}
       DB_PASSWORD: ${DB_PASSWORD:-1234}
       APP_UPLOAD_DIR: /app/uploads
+      REDIS_HOST: redis            # 단계 15: 같은 네트워크의 redis 서비스명
       TZ: Asia/Seoul
       # 운영(HTTPS) 전환 시 아래를 오버라이드한다.
       # JWT_SECRET: <운영 전용 Base64 시크릿으로 교체>
@@ -94,6 +98,22 @@ services:
       timeout: 5s
       retries: 6
       start_period: 10s
+    restart: unless-stopped
+
+  # 단계 15: 토큰 저장소(refresh TTL + access denylist). 데이터 휘발 허용 설계라
+  # compose가 수명주기를 관리한다(mysql-8과 달리 external 아님). host publish 없음(비공개).
+  redis:
+    image: redis:7-alpine
+    container_name: board-redis
+    # maxmemory 64mb: 2GB 인스턴스 예산 배려. noeviction: 토큰 임의 축출=강제 로그아웃이므로 금지
+    command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "noeviction"]
+    networks:
+      - board-db-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
     restart: unless-stopped
 
 networks:

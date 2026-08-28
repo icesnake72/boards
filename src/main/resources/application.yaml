@@ -47,6 +47,12 @@ spring:
             user-info-uri: https://kapi.kakao.com/v2/user/me
             # 사용자 응답에서 "이 사람의 이름"으로 쓸 최상위 속성 → authentication.getName() = 카카오 회원번호
             user-name-attribute: id
+  # 단계 15: Redis — refresh token 저장소(TTL) + access token denylist.
+  # 로컬 IDE 실행은 localhost, 도커/서버는 compose가 REDIS_HOST=redis 주입.
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
   datasource:
     url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:board}?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
     username: ${DB_USERNAME:root}

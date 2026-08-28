@@ -9,6 +9,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import com.example.board.auth.CustomUserDetailsService;
+import com.example.board.auth.token.TokenDenylist;
 import jakarta.servlet.FilterChain;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -27,6 +28,7 @@ class JwtAuthenticationFilterTest {
 
   @Mock JwtTokenProvider tokenProvider;
   @Mock CustomUserDetailsService userDetailsService;
+  @Mock TokenDenylist tokenDenylist;   // 단계 15: 폐기 목록
   @Mock HandlerExceptionResolver handlerExceptionResolver;
   @Mock FilterChain filterChain;
 
@@ -36,7 +38,8 @@ class JwtAuthenticationFilterTest {
   }
 
   private JwtAuthenticationFilter filter() {
-    return new JwtAuthenticationFilter(tokenProvider, userDetailsService, handlerExceptionResolver);
+    return new JwtAuthenticationFilter(
+        tokenProvider, userDetailsService, tokenDenylist, handlerExceptionResolver);
   }
 
   private MockHttpServletRequest withBearer() {
@@ -51,6 +54,8 @@ class JwtAuthenticationFilterTest {
     MockHttpServletRequest request = withBearer();
     MockHttpServletResponse response = new MockHttpServletResponse();
     given(tokenProvider.validateToken(any())).willReturn(true);
+    given(tokenProvider.getJti(any())).willReturn("jti-1");
+    given(tokenDenylist.isDenied("jti-1")).willReturn(false);
     given(tokenProvider.getUsername(any())).willReturn("gone");
     given(userDetailsService.loadUserByUsername("gone"))
         .willThrow(new UsernameNotFoundException("no such user"));
@@ -69,6 +74,8 @@ class JwtAuthenticationFilterTest {
     MockHttpServletRequest request = withBearer();
     MockHttpServletResponse response = new MockHttpServletResponse();
     given(tokenProvider.validateToken(any())).willReturn(true);
+    given(tokenProvider.getJti(any())).willReturn("jti-1");
+    given(tokenDenylist.isDenied("jti-1")).willReturn(false);
     given(tokenProvider.getUsername(any())).willReturn("user");
     given(userDetailsService.loadUserByUsername("user"))
         .willThrow(new RuntimeException("DB down"));
@@ -88,6 +95,22 @@ class JwtAuthenticationFilterTest {
     MockHttpServletRequest request = withBearer();
     MockHttpServletResponse response = new MockHttpServletResponse();
     given(tokenProvider.validateToken(any())).willReturn(false);
+
+    filter().doFilter(request, response, filterChain);
+
+    assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    verify(filterChain).doFilter(request, response);
+    verify(handlerExceptionResolver, never()).resolveException(any(), any(), any(), any());
+  }
+
+  // 단계 15: 폐기된 토큰(로그아웃된 access) — 유효 서명이어도 컨텍스트를 심지 않고 통과 → 뒷단 401.
+  @Test
+  void should_passThroughWithoutAuth_whenTokenDenylisted() throws Exception {
+    MockHttpServletRequest request = withBearer();
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    given(tokenProvider.validateToken(any())).willReturn(true);
+    given(tokenProvider.getJti(any())).willReturn("jti-denied");
+    given(tokenDenylist.isDenied("jti-denied")).willReturn(true);
 
     filter().doFilter(request, response, filterChain);
 
