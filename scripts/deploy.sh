@@ -2,12 +2,17 @@
 # ────────────────────────────────────────────────────────────────────────────
 # 서버(Lightsail) 배포 스크립트 — GitHub Actions(deploy.yml)가 SSH로 실행한다.
 #
-# 순서: .env 생성 → DB(mysql-8) 준비 → docker compose up --wait → 이미지 정리
+# 무스왑 설계: 서버는 빌드하지 않는다. CI(GitHub Actions 러너, RAM 7GB)가
+# 이미지를 빌드해 GHCR(ghcr.io)에 올리고, 이 스크립트는 pull + 실행만 한다.
+# → 2GB 인스턴스에서 gradle/npm 빌드 부하가 사라져 스왑 없이 안전하게 배포된다.
+#   (이전: 서버 빌드 + 스왑 2G 보장 — 무스왑 전환 처리에 의해 제거)
+#
+# 순서: .env 생성 → DB(mysql-8) 준비 → GHCR 로그인 → pull → up --wait → 정리
 #
 # 전제: 저장소 루트에서 실행되고, 아래 환경변수가 주입되어 있다(워크플로 envs:):
 #   KAKAO_REST_API, KAKAO_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
-#   DB_NAME, DB_USERNAME, DB_PASSWORD
-# 디버깅: 서버에서 변수 export 후 ./scripts/deploy.sh 로 직접 실행해 볼 수 있다.
+#   DB_NAME, DB_USERNAME, DB_PASSWORD, GHCR_USER, GHCR_TOKEN
+#   (GHCR_TOKEN은 워크플로의 내장 GITHUB_TOKEN — 실행 중에만 유효한 단명 토큰)
 # ────────────────────────────────────────────────────────────────────────────
 set -euo pipefail   # 오류·미정의변수·파이프 실패 시 즉시 중단
 
@@ -34,28 +39,22 @@ docker start mysql-8 2>/dev/null || docker run -d --name mysql-8 \
 docker network connect board-db-net mysql-8 2>/dev/null || true
 
 echo "▶ DB 응답 대기(최대 60초) — 앱보다 DB가 먼저 준비되어야 한다"
-# until: ping이 성공할 때까지 2초 간격 반복. 60초 초과 시 timeout이 실패(exit 124) → set -e로 배포 중단
 timeout 60 bash -c \
   'until docker exec mysql-8 mysqladmin ping -uroot -p"$DB_PASSWORD" --silent 2>/dev/null; do sleep 2; done'
 echo "  mysql-8 ready"
 
-echo "▶ 스왑 보장(2GB 인스턴스 OOM 방어 — 이미 있으면 통과)"
-# 소형 인스턴스에서 gradle+npm 빌드 중 메모리 고갈로 서버가 멈춘 사례가 있어,
-# 2G 스왑을 한 번 만들어 둔다(재부팅 후에도 이 스크립트가 다시 켜 준다).
-if ! swapon --show | grep -q /swapfile; then
-  sudo fallocate -l 2G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
-  sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
-  echo "  swap 2G 활성화"
-fi
+echo "▶ GHCR 로그인(워크플로 단명 토큰 — 패키지가 비공개여도 pull 가능)"
+echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
 
-echo "▶ 빌드(직렬) — 2GB 인스턴스에서 gradle·npm 병렬 빌드는 OOM을 부른다"
-docker compose build app                      # 무거운 gradle 빌드 단독 실행
-docker compose build frontend frontend-react  # npm(react)·정적(vanilla) 빌드
+echo "▶ 이미지 pull (서버 빌드 없음 — CI가 만든 이미지를 받기만 한다)"
+docker compose pull
 
 echo "▶ 재기동 + 헬스체크 통과까지 대기(--wait)"
-# --wait: healthcheck가 있는 모든 서비스(백엔드·프론트 2종)가 healthy 될 때까지 기다리고,
-#         하나라도 실패하면 비정상 종료 → set -e로 배포 실패 처리(별도 검증 루프 불필요)
-docker compose up -d --wait
+# --no-build: 서버에서 실수로라도 빌드가 돌지 않게 명시(무스왑 설계의 안전핀)
+# --wait: healthcheck 있는 서비스 전부 healthy까지 대기, 실패 시 exit≠0 → 배포 실패
+docker compose up -d --no-build --wait
+
+docker logout ghcr.io
 
 echo "▶ 옛 이미지 정리 + 최종 상태"
 docker image prune -f

@@ -20,7 +20,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: board-app:latest
+    image: ghcr.io/icesnake72/board-app:latest        # CI가 빌드·push, 서버는 pull만
     container_name: board-app
     env_file:
       - .env                          # KAKAO_*/GOOGLE_* 주입 (기동 필수 — 위 주석 참고)
@@ -55,7 +55,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    image: board-frontend:latest
+    image: ghcr.io/icesnake72/board-frontend:latest
     container_name: board-frontend
     depends_on:
       app:
@@ -79,7 +79,7 @@ services:
     build:
       context: ./frontend-react
       dockerfile: Dockerfile
-    image: board-frontend-react:latest
+    image: ghcr.io/icesnake72/board-frontend-react:latest
     container_name: board-frontend-react
     depends_on:
       app:
