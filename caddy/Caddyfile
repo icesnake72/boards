@@ -1,0 +1,24 @@
+# Caddy 설정 — 공개 진입점(TLS 종료 계층). 설계는 docs/lecture/HTTPS-DOMAIN.md.
+#
+# SITE_ADDRESS 환경변수 하나로 세 가지 모드를 오간다 (compose가 주입):
+#   http://localhost        — 로컬 개발 기본값. TLS 없이 그대로 통과
+#   http://sbs.alldayai.org — 서버 전환기. Cloudflare 프록시(주황 구름)가 켜져 있는
+#                             동안 오리진에서 https 리다이렉트를 하면 CF Flexible 모드와
+#                             무한 루프가 되므로, http 명시로 리다이렉트·발급을 끈다
+#   sbs.alldayai.org        — 최종형. CF 프록시 해제(DNS only) 후 이 값으로 바꾸면
+#                             Caddy가 Let's Encrypt 발급·갱신·https 리다이렉트까지 자동
+{$SITE_ADDRESS:http://localhost} {
+  reverse_proxy board-frontend-react:80 {
+    # Caddy는 X-Forwarded-For/Proto와 Host를 자동 전달하지만 Port는 안 보낸다.
+    # 백엔드의 forward-headers 계산(OAuth redirect_uri)에 필요해 명시한다.
+    header_up X-Forwarded-Port {http.request.local.port}
+  }
+}
+
+# IP 직접 접속 호환 — 기존 북마크·카카오 콘솔의 IP redirect URI가 계속 동작하도록
+# http 그대로 서빙한다(IP에는 인증서 발급이 불가하므로 리다이렉트도 하지 않는다).
+http://3.34.173.34 {
+  reverse_proxy board-frontend-react:80 {
+    header_up X-Forwarded-Port {http.request.local.port}
+  }
+}

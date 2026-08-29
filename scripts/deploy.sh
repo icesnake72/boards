@@ -25,6 +25,11 @@ GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
 DB_NAME=${DB_NAME}
 DB_USERNAME=${DB_USERNAME}
 DB_PASSWORD=${DB_PASSWORD}
+# HTTPS 진입점(caddy) 주소 — 비밀 아님. 현재는 Cloudflare 프록시(주황 구름)가 켜져
+# 있어 http:// 접두어로 오리진 리다이렉트·인증서 발급을 끈 전환기 값이다.
+# CF에서 sbs 레코드를 DNS only(회색 구름)로 바꾼 뒤 http:// 를 떼면
+# Caddy가 Let's Encrypt 발급 + https 리다이렉트까지 자동 처리한다(HTTPS-DOMAIN.md).
+SITE_ADDRESS=http://sbs.alldayai.org
 EOF
 
 echo "▶ 전용 네트워크·mysql-8 준비(없으면 생성, 있으면 그대로)"

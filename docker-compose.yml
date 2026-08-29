@@ -88,8 +88,8 @@ services:
     depends_on:
       app:
         condition: service_healthy
-    ports:
-      - "80:80"                       # 공개 진입점(메인) → http://3.34.173.34 (별도 포트 개방 불필요)
+    # HTTPS 도입: 호스트 80 공개를 caddy에 넘기고 내부 전용화(backend와 같은 격리 원칙).
+    # 외부 접근은 caddy(80/443) → 이 nginx → board-app 경로만 남는다.
     networks:
       - board-db-net                  # board-app 과 같은 네트워크(컨테이너명 프록시)
     healthcheck:
@@ -98,6 +98,28 @@ services:
       timeout: 5s
       retries: 6
       start_period: 10s
+    restart: unless-stopped
+
+  # HTTPS 도입: 공개 진입점(TLS 종료 계층). 인증서 발급·갱신은 Caddy가 전자동으로
+  # 처리하고, 우리가 관리하는 것은 caddy/Caddyfile 하나다(설계: HTTPS-DOMAIN.md).
+  caddy:
+    image: caddy:2-alpine
+    container_name: board-caddy
+    depends_on:
+      frontend-react:
+        condition: service_healthy   # 프록시 대상이 준비된 뒤 진입점 개방
+    ports:
+      - "80:80"                      # http — LE 챌린지 + (최종형에서) https 리다이렉트
+      - "443:443"                    # https — 공개 진입점(신규)
+    environment:
+      # 로컬은 기본값(http://localhost), 서버는 deploy.sh의 .env가 실주소를 주입
+      SITE_ADDRESS: ${SITE_ADDRESS:-http://localhost}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data             # 인증서 보관 — 유실 시 재발급(LE 한도와 엮임), 프루닝 금지
+      - caddy-config:/config
+    networks:
+      - board-db-net
     restart: unless-stopped
 
   # 단계 15: 토큰 저장소(refresh TTL + access denylist). 데이터 휘발 허용 설계라
@@ -123,3 +145,5 @@ networks:
 
 volumes:
   uploads:   # 업로드 이미지
+  caddy-data:   # Let's Encrypt 인증서·계정 키 (재시작·재배포에도 유지 — 중요)
+  caddy-config:
