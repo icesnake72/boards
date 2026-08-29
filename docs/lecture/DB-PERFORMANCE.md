@@ -53,12 +53,17 @@ FROM seq;
 
 ## 2. 인덱스 — 본론 (효과가 가장 극적)
 
-| 실습 대상 | 문제 | 처방 |
-|-----------|------|------|
-| 목록 `ORDER BY created_at DESC` | filesort | `created_at` 인덱스 |
-| 댓글 `WHERE board_id = ?` | FK 풀스캔 — **JPA는 FK 인덱스를 자동으로 안 만든다** | `comments(board_id)` |
-| 알림 `WHERE user_id = ? AND is_read = false` | 단일 인덱스의 한계 | 복합 인덱스 `(user_id, is_read)` — 컬럼 순서 교육 |
-| 반응 집계 | count 반복 | covering index 개념 |
+| 실습 대상                                            | 문제                        | 처방                                         |
+| ------------------------------------------------ | ------------------------- | ------------------------------------------ |
+| 목록 `ORDER BY created_at DESC`                    | filesort                  | `created_at` 인덱스                           |
+| 게시판별 목록 `WHERE board_id = ? ORDER BY created_at` | FK 인덱스로 20만 건을 찾고도 전량 재정렬 | 복합 인덱스 `(board_id, created_at)` — 컬럼 순서 교육 |
+| 알림 `WHERE user_id = ? AND is_read = false`       | 단일 인덱스의 한계                | 복합 인덱스 `(user_id, is_read)`                |
+| 반응 집계                                            | count 반복                  | covering index 개념                          |
+
+> **정정(실측 확인)**: 초안에는 "JPA는 FK 인덱스를 자동으로 안 만든다"고 썼으나,
+> **MySQL(InnoDB)은 FK 제약마다 인덱스를 자동 생성한다** — `SHOW INDEX FROM posts` 로
+> 확인된다(`FK78qo1...` 등). 그 통념은 PostgreSQL 쪽 이야기다. 따라서 우리 실습의
+> 타깃은 FK 단독 컬럼이 아니라 **정렬·복합 인덱스**다. 상세는 [[DB-PERFORMANCE-LAB]] §7.
 
 - **`EXPLAIN` 전/후 비교가 하이라이트** — `type: ALL`(풀스캔) → `ref`, rows 100만 → 수십.
   MySQL 8의 `EXPLAIN ANALYZE`는 실측 시간까지 보여준다.
@@ -106,3 +111,7 @@ maxmemory-policy가 토큰(noeviction)과 캐시(lru 계열)에서 왜 달라야
 
 더미 100만 건 → `EXPLAIN`으로 문제 확인 → 인덱스 → keyset 페이지네이션 → Redis 캐시.
 매 절마다 실측 숫자를 남긴다. 진행 확정 시 [[REDIS-TOKEN]]처럼 설계 문서부터 작성한다.
+
+> **실습편 완성**: §1~3을 실제 100만 건으로 수행하는 step-by-step 실습이
+> [[DB-PERFORMANCE-LAB]] 에 있다 (전 구간 실측값 포함 — 1,460ms→0.9ms 등).
+> 남은 것은 구현편(엔티티 인덱스 선언 + keyset API + Redis 캐시)이다.

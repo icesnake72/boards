@@ -262,7 +262,7 @@ nginx가 `proxy_set_header X-Forwarded-Proto $scheme` 으로 앞단(caddy)이 �
 | OAuth redirect_uri | `https://sbs.alldayai.org/login/oauth2/code/kakao` — 승계 체인 정상 |
 | refresh 쿠키 | `Secure; HttpOnly; SameSite=Strict` (`APP_REFRESH_COOKIE_SECURE=true`) |
 | 카카오 인가 | KOE 에러 없음 — https URI 수락 |
-| **구글 인가** | **"Sign in" 화면 정상 응답 — http 공개 IP로 막혀 있던 구글 로그인 개통** |
+| **구글 로그인** | **브라우저 E2E 성공** — http 공개 IP로 막혀 있던 구글 로그인이 https 전환으로 개통 |
 | 인증 E2E | 가입 201 → 로그인(쿠키) → me 200 → reissue 200 → logout 204 → 즉시 401 |
 
 미적용으로 남긴 것: §9-3(8070 학습용 프론트는 방화벽 미개방 상태 유지),
