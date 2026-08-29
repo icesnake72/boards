@@ -291,6 +291,80 @@ curl -i -X POST $B/auth/logout -H "Authorization: Bearer $TOKEN"
 
 > **단계 1과의 차이**: 세션 방식은 `invalidate()`로 서버 세션을 지웠다. JWT는 원래 서버에 상태가 없어 할 일이 없었지만, 단계 15부터는 위처럼 denylist로 **강제 무효화**까지 된다([[REDIS-TOKEN]]).
 
+### 6-1. denylist **이전**(단계 15 미적용) — "가짜 로그아웃" 문제 시연
+
+단계 15 이전 코드의 로그아웃은 refresh token만 지웠다. 그때의 시나리오와 결과:
+
+```bash
+# 당시 코드 기준 시나리오 (현재 코드에서는 재현되지 않는다 — 아래 참고)
+TOKEN=$(curl -s -X POST $B/auth/login -H "Content-Type: application/json" \
+  -d '{"username":"alice","password":"password123"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['accessToken'])")
+
+curl -s -o /dev/null -w "%{http_code}\n" $B/profiles/me -H "Authorization: Bearer $TOKEN"   # 200
+curl -s -o /dev/null -w "%{http_code}\n" -X POST $B/auth/logout -H "Authorization: Bearer $TOKEN"  # 204
+
+# 문제의 순간 — 로그아웃했는데도:
+curl -s -o /dev/null -w "%{http_code}\n" $B/profiles/me -H "Authorization: Bearer $TOKEN"
+# → 200  (만료까지 최대 1시간 동안 계속 200 — 서버가 access를 막을 방법이 없었다)
+```
+
+| 시점 | 응답 | 의미 |
+|------|------|------|
+| 로그아웃 직후 같은 access | **200** | stateless JWT의 구조적 한계 — "로그아웃"은 사실 refresh 재발급 차단일 뿐 |
+| access 만료(1시간) 후 | 401 | 자연 만료가 유일한 무효화 수단이었다 |
+
+> 이 동작을 직접 재현하고 싶다면 단계 15 커밋 직전으로 이동해 실행한다:
+> `git checkout 7e592a5^` → 실행·시연 → `git checkout feature/redis-token-store`.
+> (당시 logout은 쿠키의 refreshToken만 사용하고 Authorization 헤더는 무시했다)
+
+### 6-2. denylist **이후**(단계 15) — 즉시 폐기 검증 시나리오
+
+같은 절차가 이제 어떻게 달라지는지 + Redis에서 무슨 일이 일어나는지까지 관찰한다.
+
+```bash
+# ① 로그인 — access는 변수에, refresh(httpOnly 쿠키)는 cookies.txt에
+TOKEN=$(curl -s -X POST $B/auth/login -H "Content-Type: application/json" -c cookies.txt \
+  -d '{"username":"alice","password":"password123"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['accessToken'])")
+
+# ② 정상 동작 확인
+curl -s -o /dev/null -w "%{http_code}\n" $B/profiles/me -H "Authorization: Bearer $TOKEN"   # 200
+
+# ③ (관찰용) 이 토큰의 jti 확인 — 로그아웃 후 deny 키와 대조할 값
+echo "$TOKEN" | cut -d '.' -f 2 | python3 -c "
+import sys, base64, json
+s = sys.stdin.read().strip()
+print(json.loads(base64.urlsafe_b64decode(s + '=' * (-len(s) % 4)))['jti'])
+"
+
+# ④ 로그아웃 — Authorization 헤더 동봉이 핵심 (access 즉시 폐기의 재료)
+curl -s -o /dev/null -w "%{http_code}\n" -X POST $B/auth/logout \
+  -H "Authorization: Bearer $TOKEN" -b cookies.txt                                          # 204
+
+# ⑤ 단계 15의 핵심 순간 — 같은 access가 "즉시" 거부된다
+curl -s -o /dev/null -w "%{http_code}\n" $B/profiles/me -H "Authorization: Bearer $TOKEN"   # 401
+
+# ⑥ refresh도 함께 폐기됐다 — 재발급 시도 401
+curl -s -o /dev/null -w "%{http_code}\n" -X POST $B/auth/reissue -b cookies.txt             # 401
+
+# ⑦ Redis에서 실체 확인 — ③의 jti가 deny 키로 올라와 있다
+docker exec board-redis redis-cli KEYS 'deny:*'     # 1) "deny:{③의 jti}"
+docker exec board-redis redis-cli TTL "deny:{③의 jti 붙여넣기}"   # ≤3600 (access 잔여 수명)
+docker exec board-redis redis-cli KEYS 'rt:*'       # (empty) — refresh 2키도 삭제됨
+```
+
+전/후 비교 요약:
+
+| 검증 항목 | 단계 15 이전 | 단계 15 이후 |
+|-----------|--------------|--------------|
+| ⑤ 로그아웃 직후 같은 access | 200 (최대 1시간 유효) | **401 즉시** |
+| ⑥ 옛 refresh로 재발급 | 401 | 401 (동일) |
+| ⑦ Redis | (사용 안 함) | `deny:{jti}` 생성, `rt:*` 삭제 |
+
+> **환경 메모**: 위 명령은 이 문서의 전제(IDE/JAR 직접 실행, `B=http://localhost:8090/api/v1`)
+> 기준이다. 도커 compose로 띄웠다면 백엔드 포트가 비공개이므로 `B=http://localhost/api/v1`
+> (nginx 80 프록시 경유)로 바꾼다. Redis 관찰(⑦)은 두 경우 모두 `board-redis` 컨테이너
+> 기준이며, IDE 실행 시엔 앱이 붙는 localhost:6379 Redis를 대상으로 한다.
+
 ---
 
 ## 7. 에러 응답 모음 (GlobalExceptionHandler 검증)
