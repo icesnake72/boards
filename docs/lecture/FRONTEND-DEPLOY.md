@@ -29,7 +29,9 @@ flowchart LR
 이 방식의 핵심은 **백엔드를 건드리지 않는 것**이다. 백엔드엔 CORS 설정이 없지만, 프록시가 same-origin으로 만들어 주므로 그대로 동작한다.
 
 > [!NOTE]
-> 실제 배포(committed compose)에서 **백엔드(`board-app:8090`)는 host에 포트를 publish하지 않아 외부에서 직접 접근할 수 없다.** `board-app:8090`은 board-db-net 안에서 Nginx가 프록시하는 **내부 주소**일 뿐이며, 공개 진입점은 프론트뿐이다. **React 프론트가 host 80(공개 진입점·메인)** 이고, 순수 JS 프론트는 **8070**(학습·비교용 — 서버 방화벽을 열지 않으면 외부에서 접근 불가)으로 노출된다. 기존 8071 포트는 폐지됐다(자세한 배포 구조는 [[DEPLOY-LIGHTSAIL]]).
+> 실제 배포(committed compose)에서 **백엔드(`board-app:8090`)는 host에 포트를 publish하지 않아 외부에서 직접 접근할 수 없다.** `board-app:8090`은 board-db-net 안에서 Nginx가 프록시하는 **내부 주소**일 뿐이며, 공개 진입점은 프론트뿐이다. ~~React 프론트가 host 80(공개 진입점·메인)~~ 순수 JS 프론트는 **8070**(학습·비교용 — 서버 방화벽을 열지 않으면 외부에서 접근 불가)으로 노출된다. 기존 8071 포트는 폐지됐다(자세한 배포 구조는 [[DEPLOY-LIGHTSAIL]]).
+>
+> **HTTPS 도입 후 변경**: 공개 진입점은 **caddy(80/443, `https://sbs.alldayai.org`)** 가 됐고, React 프론트도 백엔드처럼 **호스트 포트 없는 내부 전용**이 됐다(caddy → react nginx → board-app). 양 프론트 nginx의 `X-Forwarded-Proto/Port`는 `$scheme` 덮어쓰기 대신 **map 승계 방식**으로 바뀌었다 — 다단 프록시에서 원 스킴이 지워지는 함정 때문. 전말은 [[HTTPS-DOMAIN]] §10.
 
 관련 파일(모두 `frontend/`): `index.html`, `styles.css`, `app.js`, `nginx.conf`, `Dockerfile`. compose에는 `frontend` 서비스가 추가된다.
 

@@ -8,6 +8,12 @@ status: 완료
 
 # AWS Lightsail 배포 설치 가이드 (서버 최초 세팅)
 
+> [!NOTE]
+> **HTTPS 도입 후(2026-08-30)**: 공개 주소는 `https://sbs.alldayai.org` 이고, 진입점은
+> **board-caddy 컨테이너(80/443, Let's Encrypt 자동)** 다. React 프론트는 내부 전용화됐고
+> 방화벽에 **443이 추가 개방**됐다. 이 문서의 "React 프론트 = host 80" 서술은 그 이전
+> 구조의 스냅샷이다 — 현행 구조와 전환 과정은 [[HTTPS-DOMAIN]] 참고.
+
 - **대상 서버**: AWS Lightsail 인스턴스 `3.34.173.34` (Amazon Linux 2023 기준)
 - **목표**: 로컬에서 하던 방식 그대로(`docker compose`) Lightsail에서 백엔드 + 프론트 2종을 띄우고, 이후 배포는 [[CICD-GITHUB-ACTIONS]]의 파이프라인이 자동으로 잇는다. 빌드는 CI(GitHub Actions 러너)가 전담하고 서버는 이미지 pull + 실행만 하므로 **스왑 없이(0B) 운영하는 무스왑 설계**다.
 - **역할 분담**: 이 문서는 **서버를 한 번 준비하는 수동 작업**(Docker·MySQL·네트워크·저장소)이다. 코드가 바뀔 때마다의 재배포는 GitHub Actions가 SSH로 처리하므로 다시 손댈 필요가 없다.
