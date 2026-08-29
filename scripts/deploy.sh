@@ -29,6 +29,9 @@ DB_PASSWORD=${DB_PASSWORD}
 # Let's Encrypt 발급·90일 자동 갱신·http→https 리다이렉트까지 전자동 처리한다.
 # (전제: DNS가 이 서버를 직접 가리켜야 한다 — Cloudflare 프록시는 DNS only. HTTPS-DOMAIN.md)
 SITE_ADDRESS=sbs.alldayai.org
+# HTTPS 최종 하드닝: refresh 쿠키를 https에서만 전송(도청 시 쿠키 탈취 차단).
+# 로컬(http)은 compose 기본값 false 유지 — 서버만 켠다.
+APP_REFRESH_COOKIE_SECURE=true
 EOF
 
 echo "▶ 전용 네트워크·mysql-8 준비(없으면 생성, 있으면 그대로)"
