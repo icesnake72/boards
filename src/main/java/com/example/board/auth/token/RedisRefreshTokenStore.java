@@ -19,6 +19,19 @@ public class RedisRefreshTokenStore implements RefreshTokenStore {
 
   private final StringRedisTemplate redis;
 
+  /// ValueOperations<String, String> ops = redis.opsForValue();
+  /// ops.set("인사말", "안녕하세요");          // SET
+  /// ops.get("인사말");                       // GET
+  /// ops.set("인증번호", "1234", Duration.ofMinutes(5));   // SET ... EX 300
+  /// ops.setIfAbsent("lock", "1", Duration.ofSeconds(10)); // SET NX EX — 분산락 기본형
+  /// ops.increment("방문자수");                // INCR
+
+  /**
+   * 왜 두 개를 저장하나 — 각 키의 용도
+   * 키	조회 시나리오
+   * rt:{token} → userId	재발급 요청 처리: 클라이언트가 보낸 refresh token이 유효한지 + 누구 것인지 한 번에 확인
+   * rt:user:{userId} → token
+   * */
   @Override
   public void save(Long userId, String token, long ttlSeconds) {
     // 기존 토큰이 있으면 먼저 폐기 — 옛 refresh token으로는 더 이상 재발급이 안 된다

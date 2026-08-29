@@ -398,12 +398,12 @@ PONG
 
 ```bash
 # 회원가입 (1회만)
-curl -s -X POST http://localhost:8090/api/v1/auth/signup \
+curl -s -X POST http://localhost/api/v1/auth/signup \
   -H "Content-Type: application/json" \
   -d '{"username":"redisstudy","email":"redisstudy@test.com","password":"pass1234!","nickname":"레디스학생"}'
 
 # 로그인 — refresh 토큰(쿠키)은 cookies.txt에 저장
-curl -s -X POST http://localhost:8090/api/v1/auth/login \
+curl -s -X POST http://localhost/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -c cookies.txt \
   -d '{"username":"redisstudy","password":"pass1234!"}'
@@ -448,13 +448,13 @@ curl -s -X POST http://localhost:8090/api/v1/auth/login \
 
 ```bash
 # 로그인해서 access 토큰을 변수에 담고
-ACCESS=$(curl -s -X POST http://localhost:8090/api/v1/auth/login \
+ACCESS=$(curl -s -X POST http://localhost/api/v1/auth/login \
   -H "Content-Type: application/json" -c cookies.txt \
   -d '{"username":"redisstudy","password":"pass1234!"}' | \
   python3 -c "import sys, json; print(json.load(sys.stdin)['accessToken'])")
 
 # 그 토큰으로 로그아웃
-curl -s -X POST http://localhost:8090/api/v1/auth/logout \
+curl -s -X POST http://localhost/api/v1/auth/logout \
   -H "Authorization: Bearer $ACCESS" -b cookies.txt -w "%{http_code}\n"
 ```
 
@@ -477,7 +477,7 @@ redis-cli에서:
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" \
-  -H "Authorization: Bearer $ACCESS" http://localhost:8090/api/v1/notifications
+  -H "Authorization: Bearer $ACCESS" http://localhost/api/v1/notifications
 ```
 
 `401` — 아직 수명이 1시간 남은 멀쩡한 토큰인데도 **즉시 거부**된다.
@@ -499,7 +499,7 @@ curl -s -o /dev/null -w "%{http_code}\n" \
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" -b cookies.txt \
-  -X POST http://localhost:8090/api/v1/auth/reissue
+  -X POST http://localhost/api/v1/auth/reissue
 ```
 
 `401` — 14일짜리 이용권이 남아 있어도 금고에서 지워지면 끝이다.
