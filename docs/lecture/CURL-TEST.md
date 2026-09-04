@@ -237,6 +237,31 @@ curl -i $B/posts/1                            # 상세 (조회수 +1)
 
 **기대**: `200 OK`. 상세를 두 번 호출하면 `viewCount`가 증가한다.
 
+### 5-3b. 글 목록 — keyset(cursor) 방식 (단계 16, 공개)
+
+무한스크롤용. 첫 요청은 커서 없이, 다음 요청은 직전 응답의 `lastCreatedAt`/`lastId`를
+그대로 되돌려 보낸다([[DB-PERFORMANCE-WALKTHROUGH]]).
+
+```bash
+curl -s "$B/boards/1/posts/cursor?size=3"
+```
+
+**기대**: `items`(최신순) + `hasNext` + `lastCreatedAt` + `lastId`. `Page`와 달리
+전체 건수(totalElements)는 없다 — COUNT를 아예 세지 않는 것이 keyset의 요점.
+
+```bash
+# 응답의 두 값을 그대로 붙여 다음 페이지 (값은 실제 응답으로 치환)
+curl -s "$B/boards/1/posts/cursor?size=3&lastCreatedAt=2026-09-05T04:31:21.758962&lastId=1048585"
+```
+
+**기대**: 직전 페이지에 이어지는 3건 — 중복/누락 없음.
+
+```bash
+curl -i "$B/boards/1/posts/cursor?size=101"
+```
+
+**기대**: `400 INVALID_INPUT` — size 상한(100) 초과 거부.
+
 ### 5-4. 다른 사용자가 alice 글 수정 시도 (→ 403)
 
 ```bash

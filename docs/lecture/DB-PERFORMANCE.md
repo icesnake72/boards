@@ -1,10 +1,10 @@
 ---
 tags: [theory, db, performance]
 requires: ["[[COMMENT]]", "[[REACTION]]"]
-status: 계획
+status: 완료
 ---
 
-# DB 성능 개선 로드맵 — 단계 16 후보 (계획 문서)
+# DB 성능 개선 로드맵 — 단계 16 (로드맵 문서)
 
 > 데이터가 많아질 때(예: 게시글 100만 건) 무엇을 할 수 있는지의 **교육용 로드맵**.
 > 아직 구현된 단계가 아니라 설계 전 계획 기록이다. 핵심 교수법은 하나 —
@@ -114,4 +114,7 @@ maxmemory-policy가 토큰(noeviction)과 캐시(lru 계열)에서 왜 달라야
 
 > **실습편 완성**: §1~3을 실제 100만 건으로 수행하는 step-by-step 실습이
 > [[DB-PERFORMANCE-LAB]] 에 있다 (전 구간 실측값 포함 — 1,460ms→0.9ms 등).
-> 남은 것은 구현편(엔티티 인덱스 선언 + keyset API + Redis 캐시)이다.
+>
+> **구현편 완성**: 실습의 증거를 코드로 옮긴 작업 순서별 기록이
+> [[DB-PERFORMANCE-WALKTHROUGH]] 에 있다 — 엔티티 `@Table(indexes)` 선언 +
+> keyset(cursor) API + React 무한스크롤. §5의 Redis 캐시만 다음 단계 후보로 남았다.

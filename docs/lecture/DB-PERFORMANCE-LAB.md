@@ -3,7 +3,7 @@ step: 16
 track: domain
 tags: [db, performance, mysql]
 requires: ["[[DB-PERFORMANCE]]", "[[COMMENT]]"]
-status: 계획
+status: 완료
 ---
 
 # 단계 16 실습 — 게시글 100만 건으로 배우는 DB 성능 (따라하기)
@@ -282,7 +282,8 @@ PK 목차에서 `id < 200020` 지점을 바로 찾아 20개만 걷기 때문이�
 | 단점 | — | "37페이지로 점프" 불가(다음/이전만) — 무한스크롤과 찰떡 |
 
 > API 레벨 전환(응답에 `lastId`를 실어 주고 React 무한스크롤 연동)은 단계 16
-> **구현편**의 몫이다 — 이 실습은 "왜 바꿔야 하는지"의 증거를 확보했다.
+> **구현편**([[DB-PERFORMANCE-WALKTHROUGH]])에서 완료했다 — 이 실습은 "왜 바꿔야
+> 하는지"의 증거를 확보하는 자리다.
 
 ---
 
@@ -370,3 +371,4 @@ exit
 `@Table(indexes = @Index(...))` 로 인덱스를 영구 선언하고, keyset 방식의
 목록 API(+React 무한스크롤)를 구현한다. 서버(운영 DB) 적용 전에는
 [[DB-PERFORMANCE]] §0의 원칙대로 "제안 → 검토" 절차를 밟는다.
+구현편은 완료되었다 — 작업 순서별 기록은 [[DB-PERFORMANCE-WALKTHROUGH]].
