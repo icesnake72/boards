@@ -4,16 +4,19 @@ import com.example.board.auth.CustomUserDetails;
 import com.example.board.global.exception.BusinessException;
 import com.example.board.global.exception.ErrorCode;
 import com.example.board.post.dto.PostCreateRequest;
+import com.example.board.post.dto.PostCursorResponse;
 import com.example.board.post.dto.PostListResponse;
 import com.example.board.post.dto.PostResponse;
 import com.example.board.post.dto.PostUpdateRequest;
 import jakarta.validation.Valid;
+import java.time.LocalDateTime;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -24,6 +27,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
@@ -39,12 +43,30 @@ public class PostController {
 
   private final PostService postService;
 
+  // 단계 16 처리에 의해 keyset 방식(/posts/cursor)이 추가됨 — 이 offset 방식은
+  // 페이지 번호 점프가 필요한 화면·교육용 비교 대상으로 유지한다.
   @GetMapping("/boards/{boardId}/posts")
   public Page<PostListResponse> getPosts(
       @PathVariable Long boardId,
       @PageableDefault(size = 10, sort = "createdAt", direction = Sort.Direction.DESC)
       Pageable pageable) {
     return postService.getPosts(boardId, pageable);
+  }
+
+  // 단계 16: keyset(cursor) 목록 — 무한스크롤용. 첫 요청은 커서 없이, 다음 요청부터
+  // 직전 응답의 lastCreatedAt/lastId를 그대로 되돌려 보낸다(두 값은 항상 쌍으로).
+  // size 상한은 한 번에 대량을 끌어가는 요청을 차단한다(악용/실수 모두).
+  @GetMapping("/boards/{boardId}/posts/cursor")
+  public PostCursorResponse getPostsByCursor(
+      @PathVariable Long boardId,
+      @RequestParam(required = false)
+      @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime lastCreatedAt,
+      @RequestParam(required = false) Long lastId,
+      @RequestParam(defaultValue = "20") int size) {
+    if (size < 1 || size > 100) {
+      throw new BusinessException(ErrorCode.INVALID_INPUT);
+    }
+    return postService.getPostsByCursor(boardId, lastCreatedAt, lastId, size);
   }
 
   // 인증 여부는 SecurityFilterChain이 판단하고, 로그인 사용자는 @AuthenticationPrincipal로 주입된다.

@@ -6,12 +6,18 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.example.board.board.Board;
 import com.example.board.board.BoardRepository;
 import com.example.board.global.exception.BusinessException;
+import com.example.board.global.exception.NotFoundException;
 import com.example.board.post.dto.PostCreateRequest;
+import com.example.board.post.dto.PostCursorResponse;
+import com.example.board.post.dto.PostListResponse;
 import com.example.board.post.dto.PostResponse;
 import com.example.board.post.dto.PostUpdateRequest;
 import com.example.board.user.Role;
 import com.example.board.user.User;
 import com.example.board.user.UserRepository;
+import jakarta.persistence.EntityManager;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -33,6 +39,9 @@ class PostServiceTest {
 
   @Autowired
   BoardRepository boardRepository;
+
+  @Autowired
+  EntityManager em;
 
   User author;
   Board board;
@@ -249,5 +258,110 @@ class PostServiceTest {
     PostResponse viewed = postService.getPost(created.id(), null);
 
     assertThat(viewed.viewCount()).isEqualTo(1);
+  }
+
+  // ── 단계 16: keyset(cursor) 페이지네이션 ─────────────────────────────────────
+
+  private List<Long> createPosts(int count) {
+    List<Long> ids = new ArrayList<>();
+    for (int i = 1; i <= count; i++) {
+      ids.add(postService.create(
+          board.getId(), author.getId(), new PostCreateRequest("글 " + i, "내용 " + i), null).id());
+    }
+    return ids;
+  }
+
+  // 커서로 전체를 순회하며 만난 id를 순서대로 수집(무한 루프 방지 상한 포함)
+  private List<Long> walkAllPages(int size) {
+    List<Long> collected = new ArrayList<>();
+    LocalDateTime lastCreatedAt = null;
+    Long lastId = null;
+    for (int guard = 0; guard < 100; guard++) {
+      PostCursorResponse page =
+          postService.getPostsByCursor(board.getId(), lastCreatedAt, lastId, size);
+      page.items().stream().map(PostListResponse::id).forEach(collected::add);
+      if (!page.hasNext()) {
+        break;
+      }
+      lastCreatedAt = page.lastCreatedAt();
+      lastId = page.lastId();
+    }
+    return collected;
+  }
+
+  @Test
+  void should_returnNewestFirst_withCursor_onFirstPage() {
+    List<Long> ids = createPosts(5);
+
+    PostCursorResponse page = postService.getPostsByCursor(board.getId(), null, null, 2);
+
+    // 최신순: 마지막에 만든 글이 맨 앞
+    assertThat(page.items()).hasSize(2);
+    assertThat(page.items().get(0).id()).isEqualTo(ids.get(4));
+    assertThat(page.items().get(1).id()).isEqualTo(ids.get(3));
+    assertThat(page.hasNext()).isTrue();
+    // 커서 = 이번 페이지 마지막 행
+    assertThat(page.lastId()).isEqualTo(ids.get(3));
+    assertThat(page.lastCreatedAt()).isNotNull();
+  }
+
+  @Test
+  void should_walkAllPages_withoutOverlapOrGap() {
+    List<Long> ids = createPosts(5);
+
+    List<Long> collected = walkAllPages(2);
+
+    // 5건이 정확히 한 번씩, 최신순으로 — 페이지 경계에서 중복/누락 없음
+    assertThat(collected).hasSize(5);
+    assertThat(collected).doesNotHaveDuplicates();
+    assertThat(collected).isSortedAccordingTo((a, b) -> Long.compare(b, a));
+    assertThat(collected).containsExactlyInAnyOrderElementsOf(ids);
+  }
+
+  @Test
+  void should_setHasNextFalse_onLastPage() {
+    createPosts(3);
+
+    PostCursorResponse page = postService.getPostsByCursor(board.getId(), null, null, 5);
+
+    assertThat(page.items()).hasSize(3);
+    assertThat(page.hasNext()).isFalse();
+  }
+
+  @Test
+  void should_returnEmpty_whenBoardHasNoPosts() {
+    PostCursorResponse page = postService.getPostsByCursor(board.getId(), null, null, 20);
+
+    assertThat(page.items()).isEmpty();
+    assertThat(page.hasNext()).isFalse();
+    assertThat(page.lastCreatedAt()).isNull();
+    assertThat(page.lastId()).isNull();
+  }
+
+  // 핵심 회귀 테스트: createdAt이 전부 같아도(동률) id tie-breaker 덕에
+  // 페이지 경계에서 글이 빠지거나 중복되지 않아야 한다.
+  // createdAt은 @CreatedDate(updatable=false)라 JPA로는 못 바꾸므로 native로 동률을 만든다.
+  @Test
+  void should_notSkipOrDuplicate_whenCreatedAtTies() {
+    List<Long> ids = createPosts(5);
+    em.flush();
+    em.createNativeQuery("update posts set created_at = :ts")
+        .setParameter("ts", LocalDateTime.of(2026, 1, 1, 0, 0, 0))
+        .executeUpdate();
+    em.clear();
+
+    List<Long> collected = walkAllPages(2);
+
+    assertThat(collected).hasSize(5);
+    assertThat(collected).doesNotHaveDuplicates();
+    // 시각이 전부 같으므로 순서는 id 내림차순이어야 한다
+    assertThat(collected).isSortedAccordingTo((a, b) -> Long.compare(b, a));
+    assertThat(collected).containsExactlyInAnyOrderElementsOf(ids);
+  }
+
+  @Test
+  void should_throwNotFound_whenCursorQueryOnMissingBoard() {
+    assertThatThrownBy(() -> postService.getPostsByCursor(999999L, null, null, 20))
+        .isInstanceOf(NotFoundException.class);
   }
 }

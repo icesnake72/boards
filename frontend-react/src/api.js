@@ -118,6 +118,17 @@ export async function getPosts(boardId, page = 0, size = 20) {
   return jsonFetch(`/api/v1/boards/${boardId}/posts?page=${page}&size=${size}`);
 }
 
+// 단계 16: keyset(cursor) 목록 — 무한스크롤용.
+// cursor는 직전 응답의 { lastCreatedAt, lastId } 그대로. 첫 페이지는 null.
+export async function getPostsByCursor(boardId, cursor = null, size = 20) {
+  const params = new URLSearchParams({ size });
+  if (cursor) {
+    params.set("lastCreatedAt", cursor.lastCreatedAt);
+    params.set("lastId", cursor.lastId);
+  }
+  return jsonFetch(`/api/v1/boards/${boardId}/posts/cursor?${params}`);
+}
+
 export async function getPost(id) {
   return jsonFetch(`/api/v1/posts/${id}`);
 }

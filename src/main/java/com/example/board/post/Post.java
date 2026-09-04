@@ -9,6 +9,7 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Lob;
@@ -24,8 +25,14 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.BatchSize;
 
+// 단계 16: 게시판별 최신순 목록(WHERE board_id + ORDER BY created_at DESC)을 한 인덱스로
+// 해결하는 복합 인덱스. DB-PERFORMANCE-LAB에서 수동 생성으로 효과를 실측했던 것을
+// 엔티티 선언으로 옮겨 코드가 정본이 되게 한다(ddl-auto: update가 없으면 생성).
+// board_id가 선두 컬럼이므로 InnoDB가 FK(board_id) 받침 인덱스로도 재활용한다.
 @Entity
-@Table(name = "posts")
+@Table(name = "posts", indexes = {
+    @Index(name = "idx_posts_board_created", columnList = "board_id, created_at")
+})
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Post extends BaseTimeEntity {

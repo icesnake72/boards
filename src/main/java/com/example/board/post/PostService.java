@@ -7,6 +7,7 @@ import com.example.board.global.exception.ErrorCode;
 import com.example.board.global.exception.NotFoundException;
 import com.example.board.global.storage.FileStorageService;
 import com.example.board.post.dto.PostCreateRequest;
+import com.example.board.post.dto.PostCursorResponse;
 import com.example.board.post.dto.PostListResponse;
 import com.example.board.post.dto.PostResponse;
 import com.example.board.post.dto.PostUpdateRequest;
@@ -14,11 +15,13 @@ import com.example.board.reaction.PostReactionSummary;
 import com.example.board.reaction.ReactionService;
 import com.example.board.user.User;
 import com.example.board.user.UserRepository;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -47,6 +50,22 @@ public class PostService {
       throw new NotFoundException(ErrorCode.BOARD_NOT_FOUND);
     }
     return postRepository.findByBoardId(boardId, pageable).map(PostListResponse::from);
+  }
+
+  // 단계 16: keyset(cursor) 목록 조회 — 무한스크롤용.
+  // 커서(lastCreatedAt, lastId)가 없으면 첫 페이지, 있으면 그 지점 이후를 잇는다.
+  // size+1건을 조회해 여분 1건의 존재로 hasNext를 판정한다(COUNT 쿼리 없이).
+  @Transactional(readOnly = true)
+  public PostCursorResponse getPostsByCursor(
+      Long boardId, LocalDateTime lastCreatedAt, Long lastId, int size) {
+    if (!boardRepository.existsById(boardId)) {
+      throw new NotFoundException(ErrorCode.BOARD_NOT_FOUND);
+    }
+    Limit limit = Limit.of(size + 1);
+    List<Post> rows = (lastCreatedAt == null || lastId == null)
+        ? postRepository.findByBoardIdOrderByCreatedAtDescIdDesc(boardId, limit)
+        : postRepository.findSliceByBoardIdAfterCursor(boardId, lastCreatedAt, lastId, limit);
+    return PostCursorResponse.of(rows, size);
   }
 
   // 단계 10 처리에 의해 변경 — 기존 시그니처 create(boardId, loginUserId, request)에 images 파라미터 추가.
