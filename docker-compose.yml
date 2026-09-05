@@ -54,7 +54,10 @@ services:
       start_period: 40s
     restart: unless-stopped
 
-  # 배포 실습용 최소 프론트(순수 HTML/CSS/JS) — Nginx가 정적 서빙 + /api 프록시.
+  # React(Vite) 메인 프론트 — 빌드는 멀티스테이지(Node→Nginx), Nginx가 정적 서빙 + /api 프록시.
+  # 프론트 재편 처리에 의해 변경 — 디렉토리 frontend-react → frontend 개명, 서비스/이미지/
+  # 컨테이너 이름도 frontend 계열을 승계. 순수 JS 원형은 frontend-vanilla/ 로 이동해
+  # 학습 자료로만 보존한다(배포 대상 아님 — 서버의 옛 컨테이너는 --remove-orphans가 정리).
   frontend:
     build:
       context: ./frontend
@@ -64,35 +67,13 @@ services:
     depends_on:
       app:
         condition: service_healthy   # 백엔드가 응답 가능해진 뒤 노출
-    ports:
-      - "8070:80"                     # 학습·비교용(순수 JS 원형). 서버 방화벽을 열지 않으면 외부 비공개
-    networks:
-      - board-db-net                  # board-app 과 같은 네트워크라야 컨테이너명으로 프록시된다
-    healthcheck:
-      # localhost는 컨테이너 안에서 ::1(IPv6)로 먼저 해석되는데 nginx는 IPv4만 리슨한다
-      # → 127.0.0.1 로 명시해야 연결된다.
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 10s
-    restart: unless-stopped
-
-  # React(Vite) 버전 — production 메인 프론트. 빌드는 멀티스테이지(Node→Nginx).
-  frontend-react:
-    build:
-      context: ./frontend-react
-      dockerfile: Dockerfile
-    image: ghcr.io/icesnake72/board-frontend-react:latest
-    container_name: board-frontend-react
-    depends_on:
-      app:
-        condition: service_healthy
     # HTTPS 도입: 호스트 80 공개를 caddy에 넘기고 내부 전용화(backend와 같은 격리 원칙).
     # 외부 접근은 caddy(80/443) → 이 nginx → board-app 경로만 남는다.
     networks:
       - board-db-net                  # board-app 과 같은 네트워크(컨테이너명 프록시)
     healthcheck:
+      # localhost는 컨테이너 안에서 ::1(IPv6)로 먼저 해석되는데 nginx는 IPv4만 리슨한다
+      # → 127.0.0.1 로 명시해야 연결된다.
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
       interval: 10s
       timeout: 5s
@@ -106,7 +87,7 @@ services:
     image: caddy:2-alpine
     container_name: board-caddy
     depends_on:
-      frontend-react:
+      frontend:
         condition: service_healthy   # 프록시 대상이 준비된 뒤 진입점 개방
     ports:
       - "80:80"                      # http — LE 챌린지 + (최종형에서) https 리다이렉트

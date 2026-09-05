@@ -1,13 +1,21 @@
-# 순수 정적 프론트라 빌드 단계가 필요 없다 — 경량 nginx 이미지에 파일만 얹는다.
+# React는 빌드 단계가 필요하다(JSX/모듈 → 정적 번들). 멀티스테이지로
+# Node에서 빌드한 산출물(dist)만 경량 Nginx 이미지에 얹는다(순수 JS 버전은 빌드가 없었다).
+
+# ── 1) build stage ─────────────────────────────────────────────
+FROM node:20-alpine AS build
+WORKDIR /app
+
+# 의존성 캐시 레이어: 매니페스트만 먼저 복사 → 소스만 바뀐 재빌드에서 npm install 재사용
+COPY package.json package-lock.json* ./
+RUN npm install
+
+# 소스 복사 후 정적 번들 생성(→ /app/dist)
+COPY . .
+RUN npm run build
+
+# ── 2) runtime stage ───────────────────────────────────────────
 FROM nginx:1.27-alpine
-
-# 기본 서버 설정을 우리 것으로 교체(정적 서빙 + /api 프록시)
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-# 정적 파일 배치 (nginx 기본 문서 루트)
-COPY index.html styles.css app.js /usr/share/nginx/html/
-
+COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
-
-# 컨테이너에서 nginx를 포그라운드로 실행(기본 CMD와 동일하지만 명시)
 CMD ["nginx", "-g", "daemon off;"]

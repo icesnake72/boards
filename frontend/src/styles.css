@@ -277,3 +277,56 @@ main.wrap {
 .btn.kakao:hover { background: #f6dc00; border-color: #f6dc00; }
 .btn.google { background: #fff; color: #3c4043; border-color: #dadce0; }
 .btn.google:hover { background: #f8f9fa; border-color: #dadce0; }
+
+/* 페이지 점프 바 — 스크롤 중에도 보이도록 뷰포트 하단에 sticky */
+.pagination {
+  position: sticky;
+  bottom: 12px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  margin: 16px auto;
+  padding: 8px 12px;
+  width: fit-content;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+.page-btn {
+  min-width: 34px;
+  height: 34px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
+.page-btn:hover { background: var(--accent-weak); }
+.page-btn.active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  cursor: default;
+}
+.page-gap { color: var(--muted); padding: 0 2px; user-select: none; }
+
+/* 최상단 이동 버튼 — 한 화면 이상 스크롤하면 우하단에 나타난다 */
+.top-btn {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--card);
+  color: var(--accent);
+  font-size: 20px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+.top-btn:hover { background: var(--accent-weak); }

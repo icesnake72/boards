@@ -3,34 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>게시판 — 배포 실습</title>
-    <link rel="stylesheet" href="styles.css" />
+    <title>게시판 — 배포 실습 (React)</title>
   </head>
   <body>
-    <header class="site-header">
-      <div class="wrap">
-        <h1>게시판</h1>
-        <p class="subtitle">Spring Boot 백엔드 + Nginx 정적 프론트 — 배포 실습용 최소 화면</p>
-      </div>
-    </header>
-
-    <main class="wrap">
-      <div class="toolbar">
-        <span id="count" class="count" aria-live="polite"></span>
-        <button id="refresh" type="button" class="btn">새로고침</button>
-      </div>
-
-      <!-- 상태별 영역: 로딩 / 에러 / 비어있음 / 목록 -->
-      <div id="status" class="status" role="status"></div>
-      <ul id="board-list" class="board-list"></ul>
-    </main>
-
-    <footer class="site-footer">
-      <div class="wrap">
-        <span>데이터 출처: <code>GET /api/v1/boards</code> (Nginx가 백엔드로 프록시)</span>
-      </div>
-    </footer>
-
-    <script src="app.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

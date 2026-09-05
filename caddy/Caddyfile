@@ -8,7 +8,7 @@
 #   sbs.alldayai.org        — 최종형. CF 프록시 해제(DNS only) 후 이 값으로 바꾸면
 #                             Caddy가 Let's Encrypt 발급·갱신·https 리다이렉트까지 자동
 {$SITE_ADDRESS:http://localhost} {
-  reverse_proxy board-frontend-react:80 {
+  reverse_proxy board-frontend:80 {
     # Caddy는 X-Forwarded-For/Proto와 Host를 자동 전달하지만 Port는 안 보낸다.
     # 백엔드의 forward-headers 계산(OAuth redirect_uri)에 필요해 명시한다.
     header_up X-Forwarded-Port {http.request.local.port}
@@ -18,7 +18,7 @@
 # IP 직접 접속 호환 — 기존 북마크·카카오 콘솔의 IP redirect URI가 계속 동작하도록
 # http 그대로 서빙한다(IP에는 인증서 발급이 불가하므로 리다이렉트도 하지 않는다).
 http://3.34.173.34 {
-  reverse_proxy board-frontend-react:80 {
+  reverse_proxy board-frontend:80 {
     header_up X-Forwarded-Port {http.request.local.port}
   }
 }

@@ -2,7 +2,7 @@
 # GitHub Actions CI/CD — AWS Lightsail 배포 (무스왑 설계)
 #
 # 흐름: (1) test — 빌드·테스트(H2) 게이트
-#       (2) build — 이미지 3종을 러너(RAM 7GB)에서 빌드해 GHCR(ghcr.io)에 push
+#       (2) build — 이미지 2종(app·frontend)을 러너(RAM 7GB)에서 빌드해 GHCR(ghcr.io)에 push
 #       (3) deploy — SSH 접속 → 코드 최신화 → scripts/deploy.sh (pull + 실행만)
 #
 # 왜 서버에서 빌드하지 않나: 2GB 인스턴스에서 gradle+npm 빌드는 메모리를 넘겨
@@ -82,21 +82,14 @@ jobs:
           cache-from: type=gha,scope=app
           cache-to: type=gha,mode=max,scope=app
 
-      - name: 순수 JS 프론트 이미지 빌드·push
+      # 프론트 재편 처리에 의해 변경 — 순수 JS 프론트(frontend-vanilla)는 학습 자료로만
+      # 남기고 빌드·배포 대상에서 제외. React가 frontend 이름을 승계한다.
+      - name: 프론트(React) 이미지 빌드·push
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
           push: true
           tags: ghcr.io/icesnake72/board-frontend:latest
-          cache-from: type=gha,scope=fe
-          cache-to: type=gha,mode=max,scope=fe
-
-      - name: React 프론트 이미지 빌드·push
-        uses: docker/build-push-action@v6
-        with:
-          context: ./frontend-react
-          push: true
-          tags: ghcr.io/icesnake72/board-frontend-react:latest
           cache-from: type=gha,scope=fer
           cache-to: type=gha,mode=max,scope=fer
 

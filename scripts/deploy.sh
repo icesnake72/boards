@@ -59,7 +59,9 @@ docker compose pull
 echo "▶ 재기동 + 헬스체크 통과까지 대기(--wait)"
 # --no-build: 서버에서 실수로라도 빌드가 돌지 않게 명시(무스왑 설계의 안전핀)
 # --wait: healthcheck 있는 서비스 전부 healthy까지 대기, 실패 시 exit≠0 → 배포 실패
-docker compose up -d --no-build --wait
+# --remove-orphans: compose에서 삭제된 서비스의 잔존 컨테이너 정리
+#   (프론트 재편으로 없어진 frontend-react 등 — 없으면 no-op라 항상 켜 둔다)
+docker compose up -d --no-build --wait --remove-orphans
 
 docker logout ghcr.io
 
