@@ -63,6 +63,12 @@ echo "▶ 재기동 + 헬스체크 통과까지 대기(--wait)"
 #   (프론트 재편으로 없어진 frontend-react 등 — 없으면 no-op라 항상 켜 둔다)
 docker compose up -d --no-build --wait --remove-orphans
 
+echo "▶ caddy 설정 반영(무중단 reload)"
+# Caddyfile 내용 변경은 compose의 재생성 트리거가 아니다(마운트 경로·이미지가 같으면
+# 컨테이너를 그대로 둔다). 그래서 매 배포마다 명시적으로 reload해 최신 설정을 적용한다.
+# 방금 재생성된 경우에는 같은 설정을 다시 읽는 무해한 no-op이다.
+docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+
 docker logout ghcr.io
 
 echo "▶ 옛 이미지 정리 + 최종 상태"

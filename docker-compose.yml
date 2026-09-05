@@ -96,7 +96,11 @@ services:
       # 로컬은 기본값(http://localhost), 서버는 deploy.sh의 .env가 실주소를 주입
       SITE_ADDRESS: ${SITE_ADDRESS:-http://localhost}
     volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # 디렉토리 마운트(파일 아님): git reset·에디터 저장은 파일을 "새 inode로 교체"하는데,
+      # 단일 파일 bind mount는 옛 inode를 계속 붙들어 컨테이너 안 내용이 갱신되지 않는다
+      # (실제 사고: 프론트 재편 배포에서 caddy가 삭제된 옛 업스트림을 찾다 전면 502).
+      # 디렉토리로 마운트하면 경로 조회가 디렉토리를 거치므로 교체된 파일이 즉시 보인다.
+      - ./caddy:/etc/caddy:ro
       - caddy-data:/data             # 인증서 보관 — 유실 시 재발급(LE 한도와 엮임), 프루닝 금지
       - caddy-config:/config
     networks:
