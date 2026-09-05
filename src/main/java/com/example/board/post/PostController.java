@@ -69,6 +69,23 @@ public class PostController {
     return postService.getPostsByCursor(boardId, lastCreatedAt, lastId, size);
   }
 
+  // 단계 17: 게시판 내 검색(FULLTEXT + ngram) — 커서·size 규칙은 /posts/cursor와
+  // 동일 계약이라 응답(PostCursorResponse)도 프론트 무한스크롤 코드도 재사용된다.
+  // 검색어 검증(2글자 미만 400)은 정제 후 판단해야 하므로 서비스의 몫.
+  @GetMapping("/boards/{boardId}/posts/search")
+  public PostCursorResponse searchPosts(
+      @PathVariable Long boardId,
+      @RequestParam String query,
+      @RequestParam(required = false)
+      @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime lastCreatedAt,
+      @RequestParam(required = false) Long lastId,
+      @RequestParam(defaultValue = "20") int size) {
+    if (size < 1 || size > 100) {
+      throw new BusinessException(ErrorCode.INVALID_INPUT);
+    }
+    return postService.searchPosts(boardId, query, lastCreatedAt, lastId, size);
+  }
+
   // 인증 여부는 SecurityFilterChain이 판단하고, 로그인 사용자는 @AuthenticationPrincipal로 주입된다.
   // 단계 10 처리에 의해 변경 — 기존 @RequestBody(JSON) 단건에서 multipart로 전환.
   //   글 본문은 "post" 파트(application/json), 이미지는 "images" 파트(선택, 여러 장)로 받는다.

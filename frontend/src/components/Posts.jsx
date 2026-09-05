@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createPost, getPosts, getPostsByCursor } from "../api.js";
+import { createPost, getPosts, getPostsByCursor, searchPosts } from "../api.js";
 
 function formatDate(iso) {
   if (!iso) return "";
@@ -42,6 +42,8 @@ export default function Posts({ board, user, onOpenPost, onBack }) {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [showTop, setShowTop] = useState(false);     // 최상단 버튼 노출 여부
+  const [searchInput, setSearchInput] = useState(""); // 검색창 입력값
+  const [activeQuery, setActiveQuery] = useState(""); // 제출된 검색어 ("" = 일반 목록 모드)
   const sentinelRef = useRef(null);                  // 목록 끝 감지용 센티널
   const loadingRef = useRef(false);                  // 중복 로드 방지
   // 커서는 ref로 보관 — observer 콜백의 클로저가 낡은 state를 참조하는 함정 회피
@@ -50,6 +52,8 @@ export default function Posts({ board, user, onOpenPost, onBack }) {
   // 세대 번호 — 점프가 일어나면 +1. 이전 세대의 이어 보기 응답은 도착해도 폐기해서
   // "점프 결과 위에 옛 스크롤 응답이 덧붙는" 경쟁을 막는다.
   const genRef = useRef(0);
+  // 검색어도 observer 콜백에서 읽으므로 ref로 함께 보관(stale closure 회피)
+  const activeQueryRef = useRef("");
 
   // 페이지 점프: offset API로 해당 페이지를 새로 그린다(전체 페이지 수도 이때 갱신).
   // 진행 중인 이어 보기(loadMore)가 있어도 기다리지 않는다 — 세대 가드가 정리한다.
@@ -74,14 +78,42 @@ export default function Posts({ board, user, onOpenPost, onBack }) {
     }
   }, [board.id]);
 
-  // 이어 보기: 커서 이후를 keyset으로 받아 다음 번호의 블록으로 붙인다.
+  // 단계 17: 검색 첫 페이지 — 목록을 검색 결과로 교체하고 커서를 잇는다.
+  // 검색 모드에서는 페이지 바를 숨긴다(totalPages=0) — 검색 API는 COUNT를 세지
+  // 않으므로 "몇 페이지 중 몇 번째"라는 개념 자체가 없다. 무한스크롤만 남는다.
+  const searchFirst = useCallback(async (query) => {
+    const gen = ++genRef.current;
+    setStatus("검색 중…");
+    try {
+      const data = await searchPosts(board.id, query, null, PAGE_SIZE);
+      if (genRef.current !== gen) return;
+      setPageBlocks([{ no: 1, items: data.items }]);
+      setTotalPages(0);
+      setCurrentPage(1);
+      cursorRef.current = data.hasNext
+        ? { lastCreatedAt: data.lastCreatedAt, lastId: data.lastId }
+        : null;
+      setHasNext(data.hasNext);
+      setStatus(data.items.length === 0 ? "검색 결과가 없습니다." : "");
+      window.scrollTo({ top: 0 });
+    } catch (err) {
+      // 2글자 미만(400) 등 서버 검증 메시지를 그대로 보여준다
+      if (genRef.current === gen) setStatus(err.message);
+    }
+  }, [board.id]);
+
+  // 이어 보기: 커서 이후를 받아 다음 번호의 블록으로 붙인다.
+  // 일반 모드는 keyset cursor API, 검색 모드는 search API — 커서 계약이 같아
+  // 이 함수 하나가 두 모드를 겸한다.
   const loadMore = useCallback(async () => {
     if (loadingRef.current || !cursorRef.current) return;
     loadingRef.current = true;
     const gen = genRef.current;
     try {
       const cursor = cursorRef.current;
-      const data = await getPostsByCursor(board.id, cursor, PAGE_SIZE);
+      const data = activeQueryRef.current
+        ? await searchPosts(board.id, activeQueryRef.current, cursor, PAGE_SIZE)
+        : await getPostsByCursor(board.id, cursor, PAGE_SIZE);
       if (genRef.current !== gen) return;            // 응답 대기 중 점프 발생 — 이 결과는 버린다
       setPageBlocks((prev) => {
         const nextNo = prev.length ? prev[prev.length - 1].no + 1 : 1;
@@ -98,7 +130,29 @@ export default function Posts({ board, user, onOpenPost, onBack }) {
     }
   }, [board.id]);
 
-  useEffect(() => { jumpToPage(1, { scrollTop: false }); }, [jumpToPage]);
+  useEffect(() => {
+    // 게시판이 바뀌면 검색 모드도 해제하고 처음부터
+    activeQueryRef.current = "";
+    setActiveQuery("");
+    setSearchInput("");
+    jumpToPage(1, { scrollTop: false });
+  }, [jumpToPage]);
+
+  function handleSearch(e) {
+    e.preventDefault();
+    const q = searchInput.trim();
+    if (!q) return;
+    activeQueryRef.current = q;
+    setActiveQuery(q);
+    searchFirst(q);
+  }
+
+  function clearSearch() {
+    activeQueryRef.current = "";
+    setActiveQuery("");
+    setSearchInput("");
+    jumpToPage(1);
+  }
 
   // 센티널이 뷰포트에 들어오면 다음 페이지 로드(바닥 200px 전에 미리 당긴다).
   useEffect(() => {
@@ -161,8 +215,22 @@ export default function Posts({ board, user, onOpenPost, onBack }) {
       <div className="toolbar">
         <button type="button" className="btn" onClick={onBack}>← 게시판 목록</button>
         <h2 className="section-title">{board.name}</h2>
-        <button type="button" className="btn" onClick={() => jumpToPage(1)}>새로고침</button>
+        <button type="button" className="btn" onClick={() => (activeQuery ? searchFirst(activeQuery) : jumpToPage(1))}>새로고침</button>
       </div>
+
+      {/* 단계 17: 게시판 내 검색 — 제출 시 목록이 검색 결과로 바뀐다 */}
+      <form className="search-bar" onSubmit={handleSearch}>
+        <input
+          placeholder="제목·내용 검색 (2글자 이상)"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+        />
+        <button className="btn primary">검색</button>
+        {activeQuery && (
+          <button type="button" className="btn" onClick={clearSearch}>해제</button>
+        )}
+      </form>
+      {activeQuery && <div className="status">“{activeQuery}” 검색 결과 (최신순)</div>}
 
       {status && <div className="status" role="status">{status}</div>}
 

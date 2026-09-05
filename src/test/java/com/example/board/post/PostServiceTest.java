@@ -387,4 +387,41 @@ class PostServiceTest {
     assertThat(page.getTotalElements()).isEqualTo(5);
     assertThat(page.getTotalPages()).isEqualTo(3);
   }
+
+  // ── 단계 17: 검색 — 검증 경로만 H2로 테스트한다 ─────────────────────────────
+  // MATCH AGAINST(ngram FULLTEXT)는 H2에 없어 실행 경로는 실 MySQL E2E로 검증한다
+  // (POST-SEARCH.md 함정 ⑤의 전략 결정). 아래는 native 쿼리에 도달하기 전에
+  // 끝나는 경로들 — 검색어 정제·거부와 게시판 존재 검증.
+
+  @Test
+  void should_rejectSearch_whenQueryTooShort() {
+    assertThatThrownBy(() -> postService.searchPosts(board.getId(), "성", null, null, 20))
+        .isInstanceOf(BusinessException.class)
+        .extracting(e -> ((BusinessException) e).getErrorCode())
+        .isEqualTo(com.example.board.global.exception.ErrorCode.SEARCH_QUERY_TOO_SHORT);
+  }
+
+  // BOOLEAN MODE 연산자만으로 이뤄진 검색어 — 제거하고 나면 남는 토큰이 없어야 거부
+  @Test
+  void should_rejectSearch_whenQueryIsOnlyBooleanOperators() {
+    assertThatThrownBy(() -> postService.searchPosts(board.getId(), "+-\"*()", null, null, 20))
+        .isInstanceOf(BusinessException.class)
+        .extracting(e -> ((BusinessException) e).getErrorCode())
+        .isEqualTo(com.example.board.global.exception.ErrorCode.SEARCH_QUERY_TOO_SHORT);
+  }
+
+  // 1글자 토큰들만 있는 검색어("가 나 다")도 전부 걸러져 거부되어야 한다
+  @Test
+  void should_rejectSearch_whenAllTokensShorterThanNgram() {
+    assertThatThrownBy(() -> postService.searchPosts(board.getId(), "가 나 다", null, null, 20))
+        .isInstanceOf(BusinessException.class)
+        .extracting(e -> ((BusinessException) e).getErrorCode())
+        .isEqualTo(com.example.board.global.exception.ErrorCode.SEARCH_QUERY_TOO_SHORT);
+  }
+
+  @Test
+  void should_throwNotFound_whenSearchOnMissingBoard() {
+    assertThatThrownBy(() -> postService.searchPosts(999999L, "성능실습", null, null, 20))
+        .isInstanceOf(NotFoundException.class);
+  }
 }

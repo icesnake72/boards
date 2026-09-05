@@ -330,3 +330,18 @@ main.wrap {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
 }
 .top-btn:hover { background: var(--accent-weak); }
+
+/* 단계 17: 게시판 내 검색창 */
+.search-bar {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+.search-bar input {
+  flex: 1;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+}

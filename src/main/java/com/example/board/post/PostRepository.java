@@ -31,6 +31,33 @@ public interface PostRepository extends JpaRepository<Post, Long> {
   @EntityGraph(attributePaths = {"board", "author"})
   List<Post> findWithBoardAndAuthorByIdIn(List<Long> ids);
 
+  // ── 단계 17: 게시글 검색 (FULLTEXT + ngram) ──────────────────────────────────
+  // MATCH AGAINST는 JPQL에 없어 native로 내려간다. native에서는 @EntityGraph를 못
+  // 쓰므로 작업 9의 지연 조인 패턴을 재사용한다 — 여기서는 id만 뽑고(1단계), 엔티티
+  // 로딩은 위의 findWithBoardAndAuthorByIdIn(2단계)이 맡는다. 정렬·커서 조건은
+  // keyset 쿼리(작업 2)와 동일 계약이라 PostCursorResponse를 그대로 재사용할 수 있다.
+  // 전제: ft_posts_title_content FULLTEXT 인덱스(수동 DDL — POST-SEARCH.md §4-3).
+  @Query(value = "select p.id from posts p "
+      + "where p.board_id = :boardId "
+      + "and match(p.title, p.content) against(:query in boolean mode) "
+      + "order by p.created_at desc, p.id desc limit :limit", nativeQuery = true)
+  List<Long> searchIdsByBoardId(
+      @Param("boardId") Long boardId, @Param("query") String query, @Param("limit") int limit);
+
+  // 검색 다음 페이지 — keyset 커서 조건을 native로 복제(동일 시각 동률은 id로 확정).
+  @Query(value = "select p.id from posts p "
+      + "where p.board_id = :boardId "
+      + "and match(p.title, p.content) against(:query in boolean mode) "
+      + "and (p.created_at < :lastCreatedAt "
+      + "or (p.created_at = :lastCreatedAt and p.id < :lastId)) "
+      + "order by p.created_at desc, p.id desc limit :limit", nativeQuery = true)
+  List<Long> searchIdsByBoardIdAfterCursor(
+      @Param("boardId") Long boardId,
+      @Param("query") String query,
+      @Param("lastCreatedAt") LocalDateTime lastCreatedAt,
+      @Param("lastId") Long lastId,
+      @Param("limit") int limit);
+
   // 단계 16: keyset 페이지네이션 첫 페이지 — 커서 없이 최신순 상위 N건.
   // 정렬 기준은 (createdAt desc, id desc) 복합 — createdAt이 같은 행이 있어도
   // id가 순서를 확정하므로 페이지 경계에서 글이 빠지거나 중복되지 않는다.

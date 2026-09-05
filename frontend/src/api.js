@@ -129,6 +129,16 @@ export async function getPostsByCursor(boardId, cursor = null, size = 20) {
   return jsonFetch(`/api/v1/boards/${boardId}/posts/cursor?${params}`);
 }
 
+// 단계 17: 게시판 내 검색(FULLTEXT) — 커서 계약은 getPostsByCursor와 동일.
+export async function searchPosts(boardId, query, cursor = null, size = 20) {
+  const params = new URLSearchParams({ query, size });
+  if (cursor) {
+    params.set("lastCreatedAt", cursor.lastCreatedAt);
+    params.set("lastId", cursor.lastId);
+  }
+  return jsonFetch(`/api/v1/boards/${boardId}/posts/search?${params}`);
+}
+
 export async function getPost(id) {
   return jsonFetch(`/api/v1/posts/${id}`);
 }

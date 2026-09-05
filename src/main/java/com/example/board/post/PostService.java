@@ -17,11 +17,13 @@ import com.example.board.user.User;
 import com.example.board.user.UserRepository;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Limit;
@@ -62,6 +64,52 @@ public class PostService {
             .collect(Collectors.toMap(Post::getId, Function.identity()))
         : Map.of();
     return idPage.map(id -> PostListResponse.from(postsById.get(id)));
+  }
+
+  // 단계 17: BOOLEAN MODE의 검색 문법 문자들. 사용자는 "포함 검색"을 원하는 것이지
+  // 검색 연산자를 쓰는 게 아니므로 전부 데이터가 아닌 잡음으로 취급해 제거한다
+  // — 미검증 입력이 그대로 against()에 들어가면 문법 오류(500)나 의도치 않은
+  // 제외 검색(-단어)이 된다. LAB의 "죽일 수 없는 쿼리" 방어선이기도 하다.
+  private static final Pattern BOOLEAN_SYNTAX = Pattern.compile("[+\\-><()~*\"@]");
+
+  // 단계 17: 게시글 검색 — FULLTEXT(ngram) + keyset. 응답·커서 계약은
+  // getPostsByCursor와 동일해서 프론트 무한스크롤 코드가 그대로 재사용된다.
+  @Transactional(readOnly = true)
+  public PostCursorResponse searchPosts(
+      Long boardId, String query, LocalDateTime lastCreatedAt, Long lastId, int size) {
+    if (!boardRepository.existsById(boardId)) {
+      throw new NotFoundException(ErrorCode.BOARD_NOT_FOUND);
+    }
+    String booleanQuery = toBooleanQuery(query);
+    int limit = size + 1;
+    List<Long> ids = (lastCreatedAt == null || lastId == null)
+        ? postRepository.searchIdsByBoardId(boardId, booleanQuery, limit)
+        : postRepository.searchIdsByBoardIdAfterCursor(
+            boardId, booleanQuery, lastCreatedAt, lastId, limit);
+    if (ids.isEmpty()) {
+      return PostCursorResponse.of(List.of(), size);
+    }
+    // 지연 조인 2단계 + 순서 복원 — id 목록(size+1 포함)을 그대로 엔티티로 바꿔
+    // PostCursorResponse.of에 넘기면 hasNext 판정과 트리밍까지 기존 로직이 처리한다.
+    Map<Long, Post> postsById = postRepository.findWithBoardAndAuthorByIdIn(ids).stream()
+        .collect(Collectors.toMap(Post::getId, Function.identity()));
+    List<Post> ordered = ids.stream().map(postsById::get).toList();
+    return PostCursorResponse.of(ordered, size);
+  }
+
+  // 검색어 정제 3단계: ① 연산자 제거 ② 2글자 미만 토큰 제외(ngram_token_size=2
+  // 미만은 색인에 없어, AND에 끼면 전체를 0건으로 만든다) ③ 남은 토큰마다 +를 붙여
+  // "모두 포함(AND)" 의미로 통일 — 연산자 없는 BOOLEAN MODE는 토큰이 선택 사항이라
+  // OR처럼 동작해 버리기 때문. 살아남은 토큰이 없으면 명시적으로 거부한다(400).
+  private String toBooleanQuery(String query) {
+    String cleaned = query == null ? "" : BOOLEAN_SYNTAX.matcher(query).replaceAll(" ");
+    List<String> tokens = Arrays.stream(cleaned.trim().split("\\s+"))
+        .filter(token -> token.length() >= 2)
+        .toList();
+    if (tokens.isEmpty()) {
+      throw new BusinessException(ErrorCode.SEARCH_QUERY_TOO_SHORT);
+    }
+    return tokens.stream().map(token -> "+" + token).collect(Collectors.joining(" "));
   }
 
   // 단계 16: keyset(cursor) 목록 조회 — 무한스크롤용.
