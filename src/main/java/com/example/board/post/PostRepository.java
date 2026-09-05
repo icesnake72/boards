@@ -13,9 +13,23 @@ import org.springframework.data.repository.query.Param;
 
 public interface PostRepository extends JpaRepository<Post, Long> {
 
-  // @EntityGraph: 목록 조회 시 board, author를 한 쿼리로 함께 로딩 → N+1 방지
+  // 단계 16 사후 개선(지연 조인)에 의해 미사용 — 조인(@EntityGraph)을 끌고 OFFSET을
+  // 지나가면 버릴 행 전부에 조인이 수행돼 deep page에서 5초대가 된다(LAB §6-1 실측).
+  // 아래 findIdsByBoardId + findWithBoardAndAuthorByIdIn 2단계로 대체. 교육용으로 보존.
   @EntityGraph(attributePaths = {"board", "author"})
   Page<Post> findByBoardId(Long boardId, Pageable pageable);
+
+  // 단계 16 사후 개선(지연 조인) 1단계: id만 뽑는다 — SELECT/WHERE/ORDER 컬럼이 전부
+  // idx_posts_board_created 안에 있어 covering index로만 처리된다(테이블 접근 0).
+  // 정렬은 Pageable의 sort를 그대로 승계(기존 offset API와 동일 계약).
+  // Page<Long> 반환이라 COUNT 쿼리는 Spring Data가 자동 파생·실행한다.
+  @Query("select p.id from Post p where p.board.id = :boardId")
+  Page<Long> findIdsByBoardId(@Param("boardId") Long boardId, Pageable pageable);
+
+  // 지연 조인 2단계: 확정된 페이지의 id들만 조인 로딩(IN). 조인이 페이지 크기(≤100)
+  // 로 제한된다. IN 결과의 순서는 보장되지 않으므로 호출자가 id 순서로 복원한다.
+  @EntityGraph(attributePaths = {"board", "author"})
+  List<Post> findWithBoardAndAuthorByIdIn(List<Long> ids);
 
   // 단계 16: keyset 페이지네이션 첫 페이지 — 커서 없이 최신순 상위 N건.
   // 정렬 기준은 (createdAt desc, id desc) 복합 — createdAt이 같은 행이 있어도

@@ -19,7 +19,10 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.Page;
@@ -44,12 +47,21 @@ public class PostService {
   private final FileStorageService fileStorageService;
   private final ReactionService reactionService;
 
+  // 단계 16 사후 개선(지연 조인) — LAB §6-1: 조인을 끌고 OFFSET을 지나가면 deep page
+  // 에서 5,126ms(실측). ① id만 covering index로 페이징하고 ② 조인 로딩은 확정된
+  // 페이지의 행에만 수행한다(실측 66ms, 78배). IN 결과는 순서가 없으므로 Map으로
+  // 받아 id 페이지의 순서를 복원한다.
   @Transactional(readOnly = true)
   public Page<PostListResponse> getPosts(Long boardId, Pageable pageable) {
     if (!boardRepository.existsById(boardId)) {
       throw new NotFoundException(ErrorCode.BOARD_NOT_FOUND);
     }
-    return postRepository.findByBoardId(boardId, pageable).map(PostListResponse::from);
+    Page<Long> idPage = postRepository.findIdsByBoardId(boardId, pageable);
+    Map<Long, Post> postsById = idPage.hasContent()
+        ? postRepository.findWithBoardAndAuthorByIdIn(idPage.getContent()).stream()
+            .collect(Collectors.toMap(Post::getId, Function.identity()))
+        : Map.of();
+    return idPage.map(id -> PostListResponse.from(postsById.get(id)));
   }
 
   // 단계 16: keyset(cursor) 목록 조회 — 무한스크롤용.

@@ -29,6 +29,7 @@ flowchart TD
   E --> F["작업 6. 테스트<br/>동률 tie-breaker 포함"]
   F --> G["작업 7. React<br/>api.js + 무한스크롤"]
   G --> H["작업 8. 검증<br/>verify.sh + E2E"]
+  H --> I["작업 9. 사후 개선<br/>offset 지연 조인"]
 ```
 
 **왜 이 순서인가** — 데이터 계층에서 화면 쪽으로 한 방향으로 쌓는다:
@@ -43,6 +44,7 @@ flowchart TD
 | 6 | 테스트 | 백엔드가 완성된 지점에서 회귀 방어선 구축 |
 | 7 | 프론트엔드 | 검증된 API 위에 화면을 얹는다 |
 | 8 | 검증 | verify.sh + 실 DB curl + 브라우저 E2E 순서로 바깥쪽까지 |
+| 9 | 사후 개선 | 운영하며 발견된 병목(deep 페이지 점프)을 측정→기록→개선 |
 
 각 작업 끝의 **체크포인트**를 통과하고 다음으로 넘어간다.
 
@@ -504,14 +506,102 @@ public class JpaAuditingConfig {
 
 ---
 
+## 작업 9. 사후 개선 — offset 목록에 지연 조인 적용
+
+페이지 점프 UI(프론트 재편 단계)를 붙인 뒤 실사용에서 병목이 드러났다: 10,001
+페이지 점프가 브라우저 기준 **3.2초**. 원인·SQL 실측·원리는 [[DB-PERFORMANCE-LAB]]
+§6-1에 기록되어 있다 — 요지는 **OFFSET이 버릴 20만 행 전부에 @EntityGraph 조인이
+수행**된다는 것(SQL 실측 5,126ms).
+
+처방은 **지연 조인(late row lookup)**: id만 covering index로 페이징하고, 조인
+로딩은 확정된 페이지의 행에만 수행한다. 작업 순서:
+
+| 순서 | 할 일 | 이유 |
+|------|------|------|
+| 9-1 | LAB §6-1에 원인·실측 먼저 기록 | 개선 전 증거 확보 — "측정 → 기록 → 개선" 순서 유지 |
+| 9-2 | `PostRepository`에 2단계 쿼리 추가 | 서비스가 쓸 재료부터 |
+| 9-3 | `PostService.getPosts` 교체 + 순서 복원 | 기존 API 계약(응답 형태) 무변경 |
+| 9-4 | 순서·메타데이터 회귀 테스트 | IN 결과가 무순서인 것이 이 개선의 유일한 함정 |
+| 9-5 | verify.sh + 실 DB API 재측정 | before/after 숫자 확보 |
+
+### 9-1. `PostRepository` — 2단계 쿼리
+
+```java
+// 단계 16 사후 개선(지연 조인) 1단계: id만 뽑는다 — SELECT/WHERE/ORDER 컬럼이 전부
+// idx_posts_board_created 안에 있어 covering index로만 처리된다(테이블 접근 0).
+// 정렬은 Pageable의 sort를 그대로 승계(기존 offset API와 동일 계약).
+// Page<Long> 반환이라 COUNT 쿼리는 Spring Data가 자동 파생·실행한다.
+@Query("select p.id from Post p where p.board.id = :boardId")
+Page<Long> findIdsByBoardId(@Param("boardId") Long boardId, Pageable pageable);
+
+// 지연 조인 2단계: 확정된 페이지의 id들만 조인 로딩(IN). 조인이 페이지 크기(≤100)
+// 로 제한된다. IN 결과의 순서는 보장되지 않으므로 호출자가 id 순서로 복원한다.
+@EntityGraph(attributePaths = {"board", "author"})
+List<Post> findWithBoardAndAuthorByIdIn(List<Long> ids);
+```
+
+기존 `findByBoardId(@EntityGraph + Page<Post>)`는 지우지 않고 "미사용 — 교육용
+보존" 주석을 단다(전/후 비교 대상).
+
+포인트: `Page<Long>` 반환 타입 — Spring Data가 COUNT 쿼리를 자동으로 만들어
+실행해 주므로 페이지 메타데이터(totalPages 등)가 공짜로 유지된다.
+
+### 9-2. `PostService.getPosts` — 교체와 순서 복원
+
+```java
+// 단계 16 사후 개선(지연 조인) — LAB §6-1: 조인을 끌고 OFFSET을 지나가면 deep page
+// 에서 5,126ms(실측). ① id만 covering index로 페이징하고 ② 조인 로딩은 확정된
+// 페이지의 행에만 수행한다(실측 66ms, 78배). IN 결과는 순서가 없으므로 Map으로
+// 받아 id 페이지의 순서를 복원한다.
+@Transactional(readOnly = true)
+public Page<PostListResponse> getPosts(Long boardId, Pageable pageable) {
+  if (!boardRepository.existsById(boardId)) {
+    throw new NotFoundException(ErrorCode.BOARD_NOT_FOUND);
+  }
+  Page<Long> idPage = postRepository.findIdsByBoardId(boardId, pageable);
+  Map<Long, Post> postsById = idPage.hasContent()
+      ? postRepository.findWithBoardAndAuthorByIdIn(idPage.getContent()).stream()
+          .collect(Collectors.toMap(Post::getId, Function.identity()))
+      : Map.of();
+  return idPage.map(id -> PostListResponse.from(postsById.get(id)));
+}
+```
+
+(import 추가: `java.util.Map`, `java.util.function.Function`,
+`java.util.stream.Collectors`.)
+
+핵심은 마지막 줄 — **`idPage.map(...)`이 순서의 정본**이다. IN으로 불러온
+엔티티는 순서가 뒤섞여 있지만, id 페이지의 순서대로 Map에서 꺼내 매핑하므로
+정렬이 복원된다. 컨트롤러·프론트·응답 JSON은 한 글자도 안 바뀐다.
+
+### 9-3. 회귀 테스트
+
+`should_preserveOrderAndMetadata_onOffsetPage_withLateJoin` — 5건 생성 후 2페이지
+(size 2)를 요청해 ① 순서(최신순 3번째·2번째 글), ② totalElements=5,
+totalPages=3, ③ 작성자 매핑을 단정한다. **순서 복원 로직을 빼먹으면 이 테스트만
+떨어진다** — IN의 무순서가 이 개선의 유일한 함정이라서다.
+
+### 9-4. 측정 결과
+
+| 구간 | before | after | 배율 |
+|------|--------|-------|------|
+| SQL (조인 offset → 지연 조인) | 5,126ms | 66ms | 78배 |
+| API `?page=10000` (20만 건 게시판) | 3.2s (브라우저) | **60ms** | 약 53배 |
+
+한계도 함께 기록한다 — 지연 조인도 covering index를 깊이만큼 걷는 O(깊이)라서
+데이터가 커지면 다시 느려진다. 그때의 다음 수는 점프 범위 제한 또는 날짜 점프
+(keyset seek)다([[DB-PERFORMANCE-LAB]] §6-1).
+
+---
+
 ## 부록: 최종 변경 요약
 
 | 파일 | 변경 | 내용 |
 |------|------|------|
 | `post/Post.java` | 수정 | `@Table(indexes)` 복합 인덱스 선언 |
-| `post/PostRepository.java` | 수정 | keyset 쿼리 2개 (첫 페이지 / 커서 이후) |
+| `post/PostRepository.java` | 수정 | keyset 쿼리 2개 + 지연 조인 2단계 쿼리 (작업 9) |
 | `post/dto/PostCursorResponse.java` | **신규** | 커서 응답 DTO + size+1 → hasNext 판정 |
-| `post/PostService.java` | 수정 | `getPostsByCursor` (분기 + 404 규칙 승계) |
+| `post/PostService.java` | 수정 | `getPostsByCursor` + `getPosts` 지연 조인 전환 (작업 9) |
 | `post/PostController.java` | 수정 | `GET /boards/{id}/posts/cursor` + size 상한 |
 | `post/PostServiceTest.java` | 수정 | 커서 테스트 7개 (동률 tie-breaker 포함) |
 | `frontend-react/src/api.js` | 수정 | `getPostsByCursor` 추가 |

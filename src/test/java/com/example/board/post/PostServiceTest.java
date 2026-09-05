@@ -22,6 +22,7 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
@@ -363,5 +364,27 @@ class PostServiceTest {
   void should_throwNotFound_whenCursorQueryOnMissingBoard() {
     assertThatThrownBy(() -> postService.getPostsByCursor(999999L, null, null, 20))
         .isInstanceOf(NotFoundException.class);
+  }
+
+  // 단계 16 사후 개선(지연 조인) 회귀 테스트 — offset 목록이 2단계 조회(id 페이징 →
+  // IN 로딩)로 바뀌어도, 순서·페이지 메타데이터·매핑이 기존 계약과 동일해야 한다.
+  // IN 결과는 순서가 없으므로 "순서 복원" 로직이 빠지면 이 테스트가 잡는다.
+  @Test
+  void should_preserveOrderAndMetadata_onOffsetPage_withLateJoin() {
+    List<Long> ids = createPosts(5);
+
+    var pageable = org.springframework.data.domain.PageRequest.of(
+        1, 2, org.springframework.data.domain.Sort.by(
+            org.springframework.data.domain.Sort.Order.desc("createdAt"),
+            org.springframework.data.domain.Sort.Order.desc("id")));
+    Page<PostListResponse> page = postService.getPosts(board.getId(), pageable);
+
+    // 최신순 전체 [4,3,2,1,0] 중 2페이지(index 1) → ids[2], ids[1]
+    assertThat(page.getContent()).extracting(PostListResponse::id)
+        .containsExactly(ids.get(2), ids.get(1));
+    assertThat(page.getContent()).extracting(PostListResponse::authorUsername)
+        .containsOnly("author1");
+    assertThat(page.getTotalElements()).isEqualTo(5);
+    assertThat(page.getTotalPages()).isEqualTo(3);
   }
 }
