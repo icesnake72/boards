@@ -274,6 +274,12 @@ EXPLAIN ANALYZE SELECT id, title FROM posts WHERE id < 200020 ORDER BY id DESC L
 **0.07ms** — 읽은 행 20건. 1페이지든 4만 페이지든 **같은 속도**다.
 PK 목차에서 `id < 200020` 지점을 바로 찾아 20개만 걷기 때문이다.
 
+> 주의: 이 `200020`은 "id가 1부터 빈틈없이 100만까지"라는 가정의 예시값이다.
+> 실제 테이블의 id는 연속이 아니다(AUTO_INCREMENT 시작점·대량 INSERT의 2ⁿ 번호
+> 예약·삭제 갭). 그래서 keyset의 커서는 **산수로 계산하지 않고, 직전 페이지
+> 응답의 마지막 행 값을 그대로 되돌려 보낸다** — OFFSET 결과와 이 쿼리 결과가
+> 다르게 보였다면 그 갭 때문이다.
+
 | | OFFSET 방식 | keyset 방식 |
 |---|---|---|
 | 요청 | `?page=40000` | `?lastId=200020` |
@@ -284,6 +290,71 @@ PK 목차에서 `id < 200020` 지점을 바로 찾아 20개만 걷기 때문이�
 > API 레벨 전환(응답에 `lastId`를 실어 주고 React 무한스크롤 연동)은 단계 16
 > **구현편**([[DB-PERFORMANCE-WALKTHROUGH]])에서 완료했다 — 이 실습은 "왜 바꿔야
 > 하는지"의 증거를 확보하는 자리다.
+
+### 6-1. 실전 후일담 — 조인이 낀 deep offset은 더 참혹하다 (그리고 지연 조인)
+
+페이지 점프 UI를 붙이고 나서 실제 API로 **10,001페이지**(OFFSET 200,000)를 눌러
+보니 브라우저 기준 3.2초가 걸렸다. 위 [명령 16]의 353ms보다 훨씬 나쁘다 — 왜냐하면
+실제 API는 목록에 작성자 이름이 필요해서 **조인(@EntityGraph)** 을 끌고 다니기
+때문이다.
+
+**[명령 17-1]** 실제 API와 같은 모양(조인 포함)의 deep offset:
+
+```sql
+EXPLAIN ANALYZE SELECT p.id, p.title, u.username
+FROM posts p JOIN users u ON u.id=p.user_id JOIN boards b ON b.id=p.board_id
+WHERE p.board_id=1 ORDER BY p.created_at DESC LIMIT 20 OFFSET 200000;
+```
+
+실측 출력(요약):
+
+```
+-> Limit/Offset: 20/200000 row(s)                       (actual time=5126 rows=7)
+    -> Nested loop inner join                           (rows=200007)
+        -> Index lookup (board_id=1) (reverse)          (rows=200007)
+        -> users PRIMARY lookup                         (loops=200007)   ← 조인 20만 번!
+```
+
+**5,126ms.** OFFSET이 버릴 20만 행에 대해 **행 읽기 + users 조인까지 전부 해 준
+다음** 버린다. N+1을 막으려고 넣은 조인이 deep offset과 만나면 낭비를 20만 배로
+증폭시키는 것이다.
+
+**[명령 17-2]** 처방 — **지연 조인(late row lookup)**: "id만 목차(커버링 인덱스)로
+뽑고, 조인은 살아남은 20건에만".
+
+```sql
+EXPLAIN ANALYZE SELECT p.id, p.title, u.username
+FROM (SELECT id FROM posts WHERE board_id=1
+      ORDER BY created_at DESC LIMIT 20 OFFSET 200000) t
+JOIN posts p ON p.id=t.id JOIN users u ON u.id=p.user_id;
+```
+
+실측 출력(요약):
+
+```
+-> Nested loop inner join                               (actual time=66.1 rows=7)
+    -> Covering index lookup using idx_posts_board_created (board_id=1) (reverse)
+       → Limit/Offset: 20/200000                        (rows=200007, 64.9ms)
+    -> posts/users PRIMARY lookup                       (loops=7)        ← 조인은 7번만
+```
+
+**5,126ms → 66ms (78배).** 20만 엔트리를 지나가는 건 같지만, 인덱스
+`(board_id, created_at)`에는 PK(id)가 딸려 있어 **테이블을 한 번도 안 건드리고**
+(Covering index) id만 뽑는다. 행 읽기와 조인은 최종 20건에만 일어난다.
+
+| | 조인 끌고 offset | 지연 조인 |
+|---|---|---|
+| 20만 엔트리 통과 | 행 읽기 + 조인 200,007회 | 커버링 인덱스만 |
+| 조인 횟수 | 200,007 | **7** |
+| 실측 | 5,126ms | **66ms** |
+
+남는 한계도 알고 가자 — 지연 조인도 인덱스 20만 엔트리를 걷는 **O(깊이)** 라서,
+데이터가 100배가 되면 다시 수 초가 된다. "임의 페이지 정확 점프"는 본질적으로 그
+앞을 전부 세는 연산이다. 그래서 실서비스는 점프 범위를 제한하거나(구글 검색도
+수백 페이지 이상 못 간다), "2026년 8월로 이동" 같은 **날짜 점프(keyset seek,
+O(log n))** 로 축을 바꾼다.
+
+> JPA 적용(id 조회 → IN 로딩 2단계)은 [[DB-PERFORMANCE-WALKTHROUGH]] 작업 9 참조.
 
 ---
 
