@@ -32,16 +32,16 @@ flowchart LR
   subgraph LS["Lightsail 인스턴스"]
     APP["board-app :8090 (내부 전용·비공개)"] -->|"board-db-net"| DB[("mysql-8 : board (비공개)")]
     APP -->|"board-db-net"| REDIS[("board-redis · 토큰 저장소 (비공개)")]
-    FE1["board-frontend :8070 학습용"] -->|"/api·/oauth2 프록시"| APP
-    FE2["board-frontend-react :80 메인"] -->|"/api·/oauth2 프록시"| APP
+    CADDY["board-caddy :80/:443 공개 진입점"] -->|"내부망 프록시"| FE["board-frontend (React nginx · 내부 전용)"]
+    FE -->|"/api·/oauth2 프록시"| APP
   end
-  USER["사용자 브라우저"] -->|":80"| LS
+  USER["사용자 브라우저"] -->|"https 443 (http는 리다이렉트)"| LS
 ```
 
-- **공개 진입점은 프론트뿐이다.** **React 프론트가 host 80(공개 진입점·메인)** 이고, 순수 JS 프론트는 **8070**(학습·비교용 — 방화벽을 열지 않으면 외부에서 접근 불가)이다. 기존 8071 포트는 폐지됐다. 백엔드(`board-app:8090`)와 DB(`mysql-8`)는 **host에 포트를 publish하지 않아 외부에서 직접 접근할 수 없고**, board-db-net 안에서 프론트의 Nginx만 컨테이너명 `board-app:8090`으로 프록시한다.
+- **공개 진입점은 caddy 하나다** (HTTPS 도입 + 프론트 재편 후 최종형). **React 프론트가 `frontend/` 디렉토리와 `board-frontend` 이름을 승계**해 유일한 프론트가 됐고, 호스트 포트 없는 내부 전용이다(caddy → react nginx → board-app). 순수 JS 프론트는 `frontend-vanilla/`로 이동해 **학습 자료로만 보존**되며 배포 대상이 아니다(8070·8071 폐지). 백엔드(`board-app:8090`)와 DB(`mysql-8`)는 **host에 포트를 publish하지 않아 외부에서 직접 접근할 수 없고**, board-db-net 안에서 프론트의 Nginx만 컨테이너명 `board-app:8090`으로 프록시한다.
 - **board-redis**(단계 15 — 토큰 저장소: refresh TTL + access denylist)도 compose가 pull·기동한다. host publish 없이 board-db-net 안에서만 접근되는 비공개 컨테이너이며, `maxmemory 64mb`·`noeviction`으로 2GB 인스턴스 예산에 맞췄다. 상세: [[REDIS-TOKEN]].
-- **소셜 로그인**은 메인 진입점인 React 프론트(80)의 Nginx가 `/oauth2/`·`/login/oauth2/`까지 백엔드로 중계한다(§10 참고). 순수 JS 프론트(8070)의 Nginx도 동일한 oauth 프록시 구성을 유지한다.
-- **빌드는 CI에서, 서버는 pull + 실행만(무스왑)**: 이미지 3종은 GitHub Actions 러너가 빌드해 ghcr.io에 push하고, 서버는 `docker compose pull` 후 기동만 한다 — 2GB 인스턴스에서 gradle/npm 빌드 부하가 사라져 스왑 없이 안전하다.
+- **소셜 로그인**은 React 프론트(내부 전용)의 Nginx가 `/oauth2/`·`/login/oauth2/`까지 백엔드로 중계한다(§10 참고) — 브라우저 기준으로는 caddy가 받아 프론트 nginx로 넘기는 경로다.
+- **빌드는 CI에서, 서버는 pull + 실행만(무스왑)**: 이미지 2종(app·frontend)은 GitHub Actions 러너가 빌드해 ghcr.io에 push하고, 서버는 `docker compose pull` 후 기동만 한다 — 2GB 인스턴스에서 gradle/npm 빌드 부하가 사라져 스왑 없이 안전하다.
 
 서버가 갖춰야 할 것: **Docker + docker compose**, **mysql-8 컨테이너**, **board-db-net 네트워크**, **저장소 클론(~/board)**, **방화벽 포트 개방**. 이 중 Docker 설치만 수동이고, git(AL2023엔 기본 미설치)·mysql-8·네트워크·저장소·`.env`는 이제 [[CICD-GITHUB-ACTIONS]] 파이프라인이 **없으면 자동 생성**한다(§5~§9). 아래 순서대로 준비한다.
 
@@ -54,11 +54,11 @@ Lightsail 콘솔 → 인스턴스 → **네트워킹** 탭 → **IPv4 방화벽*
 | 애플리케이션 | 프로토콜 | 포트 | 용도 |
 |---|---|---|---|
 | SSH | TCP | 22 | 접속·배포(기본 열림) |
-| HTTP | TCP | 80 | React 프론트(공개 진입점·메인) |
-| Custom | TCP | 8070 | 순수 JS 프론트(학습용, 선택) |
+| HTTP | TCP | 80 | caddy — LE 챌린지 + https 리다이렉트 |
+| HTTPS | TCP | 443 | caddy — 공개 진입점(메인) |
 
 > [!NOTE]
-> 프론트(80)가 내부에서 `/api`를 백엔드로 프록시하므로, 최소 요건은 **80·22** 다(8070은 학습용 프론트를 외부에서 보고 싶을 때만 선택 개방). **8090(백엔드)은 방화벽에 열지 않는다** — 백엔드와 DB(mysql-8)는 host에 publish하지 않아 애초에 외부에서 닿지 않으며, 비공개 상태를 유지한다. 실서비스라면 80을 443(HTTPS)로 좁히고 나머지는 닫는다.
+> 최소 요건은 **80·443·22** 다(80은 LE 인증서 발급·갱신 챌린지에도 필요해 닫으면 안 된다). **8090(백엔드)은 방화벽에 열지 않는다** — 백엔드와 DB(mysql-8)는 host에 publish하지 않아 애초에 외부에서 닿지 않으며, 비공개 상태를 유지한다. 실서비스라면 80을 443(HTTPS)로 좁히고 나머지는 닫는다.
 
 ---
 
@@ -165,7 +165,7 @@ nano .env    # KAKAO_REST_API / KAKAO_SECRET / GOOGLE_* 실제 값 입력
 ## 8. 최초 수동 기동 (검증)
 
 ```bash
-docker compose up -d --build      # app + frontend + frontend-react + redis(board-redis)
+docker compose up -d --build      # app + frontend(React) + caddy + redis(board-redis)
 docker compose ps                 # 네 컨테이너 healthy 확인 (board-redis 포함)
 # 백엔드는 host에 publish하지 않으므로 localhost:8090 직접 호출은 동작하지 않는다.
 # 공개 진입점(80)의 프론트를 거쳐 프록시로 확인한다.
@@ -174,8 +174,8 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/api/v1/boards  # /api 
 ```
 
 브라우저에서 확인:
-- React 프론트(메인): `http://3.34.173.34` (80 — 포트 생략)
-- 순수 JS 프론트(학습용): `http://3.34.173.34:8070` (방화벽에서 8070을 개방한 경우만)
+- 메인: `https://sbs.alldayai.org` (caddy → React 프론트)
+- IP 호환: `http://3.34.173.34` (Caddyfile 호환 블록)
 
 여기까지 성공하면 서버 준비 완료다.
 
@@ -186,7 +186,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/api/v1/boards  # /api 
 서버 세팅이 끝났으면, 코드가 바뀔 때마다 손으로 할 필요가 없다. **GitHub Secrets를 등록**하고 `main`에 push하면 [[CICD-GITHUB-ACTIONS]]의 워크플로(`.github/workflows/deploy.yml`)가:
 
 1. 테스트 실행(H2)
-2. **build 잡**: 이미지 3종(board-app·board-frontend·board-frontend-react)을 러너에서 빌드해 GHCR(ghcr.io)에 push — 서버 빌드 부하 0
+2. **build 잡**: 이미지 2종(board-app·board-frontend)을 러너에서 빌드해 GHCR(ghcr.io)에 push — 서버 빌드 부하 0
 3. Lightsail에 SSH 접속 → (없으면) git 자동 설치·저장소 clone, board-db-net·mysql-8 자동 생성 → `.env` 재생성 → mysql-8 준비 대기 → **GHCR 로그인 → `docker compose pull` → `up -d --no-build --wait`** — healthcheck 있는 서비스 전부가 healthy가 될 때까지 대기하고, 하나라도 실패하면 배포가 실패한다(이것이 배포 검증의 전부). board-redis(비공개 토큰 저장소)도 이 compose가 함께 pull·기동한다.
 
 를 자동 수행한다. 필요한 Secret 항목과 등록 방법은 [[CICD-GITHUB-ACTIONS]] 문서를 따른다.
@@ -195,7 +195,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/api/v1/boards  # /api 
 
 ## 10. 소셜 로그인 — 비공개 백엔드 + 프론트 프록시
 
-백엔드가 비공개(host publish 없음)라, 소셜 로그인 흐름은 **공개 프론트(React, 80)의 Nginx가 중계**한다. 순수 JS 프론트(8070)의 Nginx도 같은 oauth 프록시 구성을 갖는다.
+백엔드가 비공개(host publish 없음)라, 소셜 로그인 흐름은 **React 프론트의 Nginx가 중계**한다(브라우저 → caddy → 프론트 nginx → 백엔드).
 
 - **프론트(80) Nginx가 `/oauth2/`·`/login/oauth2/`를 프록시**한다. 브라우저는 `http://3.34.173.34/oauth2/authorization/{kakao|google}` 로 로그인을 개시하고, Nginx가 이를 `board-app:8090`으로 넘긴다. **React 메인(80)의 로그인 화면에 카카오·구글 브랜드 버튼**이 있어 클릭 한 번으로 이 주소로 이동한다.
 - 프론트 Nginx는 `X-Forwarded-Host`/`X-Forwarded-Proto`를 전달하고, 백엔드 `application.yaml`의 `server.forward-headers-strategy: framework`가 이를 반영해 `redirect_uri`를 내부 `board-app:8090`이 아니라 실제 공개 주소 `http://3.34.173.34/login/oauth2/code/*` 로 계산한다.

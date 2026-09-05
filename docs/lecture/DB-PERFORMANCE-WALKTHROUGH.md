@@ -339,7 +339,10 @@ void should_notSkipOrDuplicate_whenCreatedAtTies() {
 
 ## 작업 7. React — api.js + 무한스크롤
 
-### 7-1. `frontend-react/src/api.js` — 커서 API 함수 추가
+> 참고: 작업 당시 경로는 `frontend-react/`였으나 이후 프론트 재편으로 `frontend/`로
+> 개명됐다([[FRONTEND-PAGINATION]]). 아래 경로는 개명 후 기준으로 표기한다.
+
+### 7-1. `frontend/src/api.js` — 커서 API 함수 추가
 
 ```js
 // 단계 16: keyset(cursor) 목록 — 무한스크롤용.
@@ -356,7 +359,7 @@ export async function getPostsByCursor(boardId, cursor = null, size = 20) {
 
 기존 `getPosts`(offset)는 유지 — 서버와 같은 이유(비교·병행)다.
 
-### 7-2. `frontend-react/src/components/Posts.jsx` — 무한스크롤 전환
+### 7-2. `frontend/src/components/Posts.jsx` — 무한스크롤 전환
 
 상태 구조가 바뀐다:
 
@@ -431,7 +434,7 @@ const load = useCallback(async (reset) => {
 **체크포인트**:
 
 ```bash
-cd frontend-react && npm run build
+cd frontend && npm run build
 ```
 
 ---
@@ -604,8 +607,8 @@ totalPages=3, ③ 작성자 매핑을 단정한다. **순서 복원 로직을 �
 | `post/PostService.java` | 수정 | `getPostsByCursor` + `getPosts` 지연 조인 전환 (작업 9) |
 | `post/PostController.java` | 수정 | `GET /boards/{id}/posts/cursor` + size 상한 |
 | `post/PostServiceTest.java` | 수정 | 커서 테스트 7개 (동률 tie-breaker 포함) |
-| `frontend-react/src/api.js` | 수정 | `getPostsByCursor` 추가 |
-| `frontend-react/src/components/Posts.jsx` | 수정 | IntersectionObserver 무한스크롤 전환 |
+| `frontend/src/api.js` | 수정 | `getPostsByCursor` 추가 |
+| `frontend/src/components/Posts.jsx` | 수정 | IntersectionObserver 무한스크롤 전환 (이후 [[FRONTEND-PAGINATION]]에서 하이브리드로 확장) |
 
 건드리지 않은 것: SecurityConfig(기존 permitAll 승계), offset API(비교·병행 유지),
 docker-compose·배포 스크립트(스키마는 ddl-auto가 알아서).

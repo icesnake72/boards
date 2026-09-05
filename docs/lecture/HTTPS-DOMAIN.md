@@ -265,5 +265,30 @@ nginx가 `proxy_set_header X-Forwarded-Proto $scheme` 으로 앞단(caddy)이 �
 | **구글 로그인** | **브라우저 E2E 성공** — http 공개 IP로 막혀 있던 구글 로그인이 https 전환으로 개통 |
 | 인증 E2E | 가입 201 → 로그인(쿠키) → me 200 → reissue 200 → logout 204 → 즉시 401 |
 
-미적용으로 남긴 것: §9-3(8070 학습용 프론트는 방화벽 미개방 상태 유지),
-CF Full(strict) 회귀 옵션(오리진 LE 인증서가 있으므로 언제든 주황 구름 복귀 가능).
+미적용으로 남긴 것: §9-3(8070 학습용 프론트는 방화벽 미개방 상태 유지 — 이후
+프론트 재편으로 배포 자체에서 제외됨), CF Full(strict) 회귀 옵션(오리진 LE
+인증서가 있으므로 언제든 주황 구름 복귀 가능).
+
+### 10-1. 후속 사고 기록 — 프론트 재편 배포에서 전면 502
+
+프론트 재편([[FRONTEND-PAGINATION]])으로 caddy의 업스트림이
+`board-frontend-react` → `board-frontend`로 바뀌었는데, 배포 직후 사이트 전체가
+502가 됐다. 원인은 **단일 파일 bind mount의 inode 함정**:
+
+1. compose가 `./caddy/Caddyfile:/etc/caddy/Caddyfile:ro`로 **파일 하나**를 마운트
+2. 배포의 `git reset --hard`가 Caddyfile을 **새 inode의 새 파일로 교체**
+3. 컨테이너 안 마운트는 **옛 inode를 계속 참조** — 내용이 갱신되지 않음
+4. `caddy reload`도 옛 inode를 다시 읽어 무효. caddy는 계속 옛 업스트림
+   (`board-frontend-react` — 이번 배포에서 orphan으로 제거됨)을 찾다 502
+5. `docker restart board-caddy`로 응급 복구 (restart는 마운트를 다시 해석한다)
+
+재발 방지 두 겹(커밋 `0c36871`):
+
+| 조치 | 효과 |
+|------|------|
+| `./caddy:/etc/caddy:ro` **디렉토리 마운트**로 전환 | 경로 조회가 디렉토리를 거치므로 교체된 파일이 즉시 보임 — inode 함정 제거 |
+| deploy.sh에 `docker compose exec caddy caddy reload` 단계 | Caddyfile 내용 변경은 compose 재생성 트리거가 아니므로 매 배포 명시 반영(무중단) |
+
+> 중요: 설정 파일을 bind mount할 때는 **파일이 아니라 디렉토리**를 마운트하라.
+> git·에디터의 "저장"은 대부분 파일 교체(새 inode)라서, 단일 파일 마운트는
+> 언젠가 반드시 이 함정을 밟는다.
