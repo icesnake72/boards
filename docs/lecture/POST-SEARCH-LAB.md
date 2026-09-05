@@ -3,7 +3,7 @@ step: 17
 track: domain
 tags: [db, search, fulltext, mysql]
 requires: ["[[POST-SEARCH]]", "[[DB-PERFORMANCE-LAB]]"]
-status: 계획
+status: 완료
 ---
 
 # 단계 17 실습 — 게시글 100만 건 검색 (FULLTEXT 따라하기)
@@ -335,6 +335,6 @@ SELECT COUNT(*) FROM posts;
 | 1글자 검색 | — | 0건 | ngram_token_size=2 미만은 색인에 없음 |
 | 흔한 단어 검색 | — | 10분+ 미완료 | KILL도 안 듣는 최악 케이스 |
 
-**다음(단계 17 구현편)**: 이 증거를 코드로 옮긴다 — native `MATCH AGAINST` keyset
-쿼리, `searchPosts` 서비스(2글자 미만 400), `GET .../posts/search`, React 검색창.
-작업 순서는 [[POST-SEARCH]] §8에 정리되어 있다.
+**다음(단계 17 구현편)**: 구현 완료 — 작업 순서별 기록은
+[[POST-SEARCH-WALKTHROUGH]] (native keyset 쿼리·검색어 정제 3단계·React 검색창,
+그리고 검증 중 §6의 병리 케이스를 실제로 밟은 사건 기록까지).

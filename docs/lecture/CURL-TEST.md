@@ -262,6 +262,29 @@ curl -i "$B/boards/1/posts/cursor?size=101"
 
 **기대**: `400 INVALID_INPUT` — size 상한(100) 초과 거부.
 
+### 5-3c. 글 검색 — FULLTEXT keyset (단계 17, 공개)
+
+커서 계약은 5-3b와 동일. 전제: `ft_posts_title_content` FULLTEXT 인덱스
+([[POST-SEARCH-WALKTHROUGH]] 작업 1).
+
+```bash
+curl -s "$B/boards/1/posts/search?query=검색어&size=5"
+```
+
+**기대**: `items`(최신순) + `hasNext` + 커서. 다음 페이지는 커서 반송(5-3b와 동일).
+
+```bash
+curl -i "$B/boards/1/posts/search?query=성"
+```
+
+**기대**: `400 SEARCH_QUERY_TOO_SHORT` — ngram_token_size=2 미만은 항상 0건이라 명시 거부.
+
+```bash
+curl -i "$B/boards/1/posts/search?query=%2B%2A%28%29"
+```
+
+**기대**: `400 SEARCH_QUERY_TOO_SHORT` — BOOLEAN 연산자만 있는 검색어는 정제 후 빈 토큰.
+
 ### 5-4. 다른 사용자가 alice 글 수정 시도 (→ 403)
 
 ```bash

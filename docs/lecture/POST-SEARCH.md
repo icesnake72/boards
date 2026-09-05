@@ -3,7 +3,7 @@ step: 17
 track: domain
 tags: [db, search, fulltext, performance]
 requires: ["[[DB-PERFORMANCE]]", "[[DB-PERFORMANCE-LAB]]"]
-status: 계획
+status: 완료
 ---
 
 # 게시글 검색 설계 — 단계 17 (FULLTEXT + ngram)
@@ -11,7 +11,7 @@ status: 계획
 > 게시글 100만 건에서 "키워드가 **들어간** 글"을 찾는 기능의 설계 문서.
 > 단계 16([[DB-PERFORMANCE]])의 교훈 — "측정 → 개선 → 재측정" — 을 검색에 한 번 더
 > 적용한다. 이 문서의 모든 수치는 로컬 mysql-8(100만 건)에서의 **실측값**이다.
-> 손 실습은 [[POST-SEARCH-LAB]], 코드 구현은 단계 17 구현편(예정)의 몫.
+> 손 실습은 [[POST-SEARCH-LAB]], 구현 작업 순서별 기록은 [[POST-SEARCH-WALKTHROUGH]].
 
 ---
 
@@ -173,6 +173,7 @@ FULLTEXT는 수동 DDL로 만들며, 실무라면 Flyway 같은 마이그레이�
 | ④ | 크기가 안 보임 | `information_schema.TABLES`의 INDEX_LENGTH에 FULLTEXT가 **집계되지 않음** | FTS 보조 테이블스페이스로 확인 — 실측 69.1MB (실습 §7) |
 | ⑤ | H2에는 ngram FULLTEXT 없음 | 테스트(H2)에서 native MATCH 쿼리 실행 불가 | 구현편에서 전략 결정 (Testcontainers MySQL 또는 통합 테스트 분리) |
 | ⑥ | 흔한 단어의 최악 케이스 | 100만 건 전부에 있는 토큰 검색은 FT로도 느리다 (실습 §6 실측) | 검색 UX로 완화(최소 길이·안내), 근본 해법은 검색엔진(§7) |
+| ⑦ | 트랜잭션 안 FT 초기화 비용 | 같은 쿼리가 autocommit 6.7ms vs 트랜잭션 안 808ms+ — @Transactional 서비스는 검색마다 이 비용 | 수용(1M 기준 ~1초). 구현편 함정 C 참조 |
 
 ---
 
