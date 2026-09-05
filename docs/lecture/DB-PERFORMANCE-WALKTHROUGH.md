@@ -46,7 +46,18 @@ flowchart TD
 | 8 | 검증 | verify.sh + 실 DB curl + 브라우저 E2E 순서로 바깥쪽까지 |
 | 9 | 사후 개선 | 운영하며 발견된 병목(deep 페이지 점프)을 측정→기록→개선 |
 
-각 작업 끝의 **체크포인트**를 통과하고 다음으로 넘어간다.
+각 작업 끝의 **체크포인트**를 통과하고 다음으로 넘어간다. 아래를 하나씩
+체크하며 진행한다 (이 문서만으로 전 과정이 재현되도록 모든 코드 전문을 실었다):
+
+- [ ] 작업 1 — 엔티티 복합 인덱스 선언 → `SHOW INDEX`로 확인
+- [ ] 작업 2 — 리포지토리 keyset 쿼리 2개 → `./gradlew compileJava`
+- [ ] 작업 3 — `PostCursorResponse` DTO(신규) → 컴파일
+- [ ] 작업 4 — 서비스 `getPostsByCursor` → 컴파일
+- [ ] 작업 5 — 컨트롤러 `/posts/cursor` → `./gradlew build`
+- [ ] 작업 6 — 커서 테스트 7개(동률 포함) → `--tests PostServiceTest`
+- [ ] 작업 7 — React 무한스크롤 → `npm run build`
+- [ ] 작업 8 — 3겹 검증 + 시계 정밀도 fix(§8-1)
+- [ ] 작업 9 — 지연 조인 + 회귀 테스트 → 재측정
 
 ---
 
@@ -292,7 +303,121 @@ public PostCursorResponse getPostsByCursor(
 
 keyset의 버그는 항상 **페이지 경계**에서 난다. 테스트도 경계를 겨눈다: 첫 페이지
 순서/커서 값, 전체 순회(중복·누락 없음), 마지막 페이지 hasNext=false, 빈 게시판,
-없는 게시판 404 — 그리고 핵심 한 방:
+없는 게시판 404, 그리고 핵심인 동률 시나리오까지 **일곱 개**다. 전부
+`PostServiceTest`에 추가한다.
+
+준비 — 클래스에 `EntityManager`를 주입하고(동률 테스트용) import를 추가한다:
+
+```java
+import com.example.board.global.exception.NotFoundException;
+import com.example.board.post.dto.PostCursorResponse;
+import com.example.board.post.dto.PostListResponse;
+import jakarta.persistence.EntityManager;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import org.springframework.data.domain.Page;
+
+  @Autowired
+  EntityManager em;
+```
+
+### 6-1. 헬퍼 — 생성기와 전체 순회기
+
+```java
+// ── 단계 16: keyset(cursor) 페이지네이션 ─────────────────────────────────────
+
+private List<Long> createPosts(int count) {
+  List<Long> ids = new ArrayList<>();
+  for (int i = 1; i <= count; i++) {
+    ids.add(postService.create(
+        board.getId(), author.getId(), new PostCreateRequest("글 " + i, "내용 " + i), null).id());
+  }
+  return ids;
+}
+
+// 커서로 전체를 순회하며 만난 id를 순서대로 수집(무한 루프 방지 상한 포함)
+private List<Long> walkAllPages(int size) {
+  List<Long> collected = new ArrayList<>();
+  LocalDateTime lastCreatedAt = null;
+  Long lastId = null;
+  for (int guard = 0; guard < 100; guard++) {
+    PostCursorResponse page =
+        postService.getPostsByCursor(board.getId(), lastCreatedAt, lastId, size);
+    page.items().stream().map(PostListResponse::id).forEach(collected::add);
+    if (!page.hasNext()) {
+      break;
+    }
+    lastCreatedAt = page.lastCreatedAt();
+    lastId = page.lastId();
+  }
+  return collected;
+}
+```
+
+`walkAllPages`가 곧 클라이언트의 재현이다 — 응답 커서를 그대로 다음 요청에
+반송한다. `guard < 100`은 커서 로직이 잘못돼 같은 페이지를 영원히 돌 때
+테스트가 매달리지 않게 하는 안전핀.
+
+### 6-2. 기본 시나리오 5개
+
+```java
+@Test
+void should_returnNewestFirst_withCursor_onFirstPage() {
+  List<Long> ids = createPosts(5);
+
+  PostCursorResponse page = postService.getPostsByCursor(board.getId(), null, null, 2);
+
+  // 최신순: 마지막에 만든 글이 맨 앞
+  assertThat(page.items()).hasSize(2);
+  assertThat(page.items().get(0).id()).isEqualTo(ids.get(4));
+  assertThat(page.items().get(1).id()).isEqualTo(ids.get(3));
+  assertThat(page.hasNext()).isTrue();
+  // 커서 = 이번 페이지 마지막 행
+  assertThat(page.lastId()).isEqualTo(ids.get(3));
+  assertThat(page.lastCreatedAt()).isNotNull();
+}
+
+@Test
+void should_walkAllPages_withoutOverlapOrGap() {
+  List<Long> ids = createPosts(5);
+
+  List<Long> collected = walkAllPages(2);
+
+  // 5건이 정확히 한 번씩, 최신순으로 — 페이지 경계에서 중복/누락 없음
+  assertThat(collected).hasSize(5);
+  assertThat(collected).doesNotHaveDuplicates();
+  assertThat(collected).isSortedAccordingTo((a, b) -> Long.compare(b, a));
+  assertThat(collected).containsExactlyInAnyOrderElementsOf(ids);
+}
+
+@Test
+void should_setHasNextFalse_onLastPage() {
+  createPosts(3);
+
+  PostCursorResponse page = postService.getPostsByCursor(board.getId(), null, null, 5);
+
+  assertThat(page.items()).hasSize(3);
+  assertThat(page.hasNext()).isFalse();
+}
+
+@Test
+void should_returnEmpty_whenBoardHasNoPosts() {
+  PostCursorResponse page = postService.getPostsByCursor(board.getId(), null, null, 20);
+
+  assertThat(page.items()).isEmpty();
+  assertThat(page.hasNext()).isFalse();
+  assertThat(page.lastCreatedAt()).isNull();
+  assertThat(page.lastId()).isNull();
+}
+
+@Test
+void should_throwNotFound_whenCursorQueryOnMissingBoard() {
+  assertThatThrownBy(() -> postService.getPostsByCursor(999999L, null, null, 20))
+      .isInstanceOf(NotFoundException.class);
+}
+```
+
+### 6-3. 핵심 한 방 — createdAt 동률
 
 ```java
 // 핵심 회귀 테스트: createdAt이 전부 같아도(동률) id tie-breaker 덕에
@@ -327,7 +452,7 @@ void should_notSkipOrDuplicate_whenCreatedAtTies() {
   왜 별도로 필요한지의 실물 예시.
 
 전체 순회 헬퍼(`walkAllPages`)는 응답 커서를 그대로 다음 요청에 반송하는, 클라이언트가
-할 일의 재현이다(무한 루프 방지 guard 포함). 나머지 테스트는 소스 참조.
+할 일의 재현이다(무한 루프 방지 guard 포함).
 
 **체크포인트**:
 
@@ -430,6 +555,146 @@ const load = useCallback(async (reset) => {
   콜백이 항상 최신 커서를 읽게 한다.
 
 글 등록·새로고침은 `load(true)`로 처음부터 다시 — 새 글은 맨 위에 오기 때문.
+
+### 7-3. 완성본 전문 — 이대로 치면 단계 16이 끝난다
+
+> 이것이 **단계 16 완료 시점**(커밋 `1dc2ab8`)의 `Posts.jsx` 전문이다. 이후
+> 프론트 재편에서 페이지 점프가 추가된 하이브리드 버전으로 진화했으므로
+> ([[FRONTEND-PAGINATION]]), 현재 저장소의 파일과는 다르다 — 단계 16을 순서대로
+> 따라가는 수강생은 이 버전을 완성하고, 하이브리드는 다음 진화로 잇는다.
+
+```jsx
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPost, getPostsByCursor } from "../api.js";
+
+function formatDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}.${p(d.getMonth() + 1)}.${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+const PAGE_SIZE = 20;
+
+// 한 게시판의 글 목록(무한스크롤) + 글 작성(multipart: 제목/내용 + 이미지 선택).
+// 단계 16 처리에 의해 변경 — offset(Page) 방식에서 keyset(cursor) 방식으로 전환.
+//   목록 하단의 센티널(빈 div)이 화면에 들어오면 IntersectionObserver가 다음 페이지를
+//   이어 붙인다. 서버 커서(lastCreatedAt, lastId)를 그대로 되돌려 보내는 것이 전부라서
+//   프론트는 "몇 페이지째인지"를 계산할 필요가 없다.
+export default function Posts({ board, user, onOpenPost, onBack }) {
+  const [items, setItems] = useState([]);          // 지금까지 이어 붙인 글 목록
+  const [hasNext, setHasNext] = useState(false);
+  const [status, setStatus] = useState("불러오는 중…");
+  const [form, setForm] = useState({ title: "", content: "" });
+  const [files, setFiles] = useState([]);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const sentinelRef = useRef(null);                // 목록 끝 감지용 센티널
+  const loadingRef = useRef(false);                // 중복 로드 방지(관찰 콜백은 연달아 올 수 있다)
+  // 커서는 ref로 보관 — observer 콜백은 등록 시점의 클로저를 계속 쓰므로
+  // state에 두면 낡은 커서를 보낼 수 있다. 렌더에 쓰는 값이 아니라 ref가 적합하다.
+  const cursorRef = useRef(null);                  // { lastCreatedAt, lastId } | null
+
+  // reset=true면 처음부터(첫 페이지), false면 현재 커서에서 다음 페이지를 이어 붙인다.
+  const load = useCallback(async (reset) => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    if (reset) setStatus("불러오는 중…");
+    try {
+      const data = await getPostsByCursor(board.id, reset ? null : cursorRef.current, PAGE_SIZE);
+      setItems((prev) => (reset ? data.items : [...prev, ...data.items]));
+      cursorRef.current = data.hasNext
+        ? { lastCreatedAt: data.lastCreatedAt, lastId: data.lastId }
+        : null;
+      setHasNext(data.hasNext);
+      setStatus(reset && data.items.length === 0 ? "아직 글이 없습니다." : "");
+    } catch (err) {
+      setStatus(`글 목록을 불러오지 못했습니다: ${err.message}`);
+    } finally {
+      loadingRef.current = false;
+    }
+  }, [board.id]);
+
+  useEffect(() => {
+    cursorRef.current = null;
+    load(true);
+  }, [board.id, load]);
+
+  // 센티널이 뷰포트에 들어오면 다음 페이지 로드. hasNext가 없으면 관찰하지 않는다.
+  useEffect(() => {
+    if (!hasNext) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => { if (entries[0].isIntersecting) load(false); },
+      { rootMargin: "200px" }          // 바닥 200px 전에 미리 당겨와 끊김을 줄인다
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasNext, load]);
+
+  async function handleCreate(e) {
+    e.preventDefault();
+    setBusy(true); setMsg("");
+    try {
+      const created = await createPost(board.id, form, files);
+      setForm({ title: "", content: "" });
+      setFiles([]);
+      e.target.reset?.();
+      setMsg(`글이 등록되었습니다 (#${created.id}).`);
+      load(true);                      // 새 글은 맨 위에 오므로 처음부터 다시
+    } catch (err) {
+      setMsg(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section>
+      <div className="toolbar">
+        <button type="button" className="btn" onClick={onBack}>← 게시판 목록</button>
+        <h2 className="section-title">{board.name}</h2>
+        <button type="button" className="btn" onClick={() => load(true)}>새로고침</button>
+      </div>
+
+      {status && <div className="status" role="status">{status}</div>}
+
+      <ul className="post-list">
+        {items.map((p) => (
+          <li key={p.id} className="post-row clickable" onClick={() => onOpenPost(p)}>
+            {p.thumbnailUrl && <img className="thumb" src={p.thumbnailUrl} alt="" />}
+            <div className="post-row-body">
+              <p className="post-title">{p.title}</p>
+              <p className="post-meta">{p.authorUsername} · 조회 {p.viewCount} · {formatDate(p.createdAt)}</p>
+            </div>
+            <span className="chevron">›</span>
+          </li>
+        ))}
+      </ul>
+
+      {/* 무한스크롤 센티널 — hasNext일 때만 존재. 화면에 들어오면 다음 페이지를 당긴다 */}
+      {hasNext && <div ref={sentinelRef} className="status">더 불러오는 중…</div>}
+
+      {user ? (
+        <form className="inline-form" onSubmit={handleCreate}>
+          <strong>글 쓰기</strong>
+          <input placeholder="제목" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+          <textarea rows="4" placeholder="내용" value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })} />
+          <div className="row">
+            <input type="file" accept="image/*" multiple onChange={(e) => setFiles([...e.target.files])} />
+            <button className="btn primary" disabled={busy}>등록</button>
+          </div>
+          {msg && <span className="form-msg">{msg}</span>}
+        </form>
+      ) : (
+        <div className="status">글을 쓰려면 로그인하세요.</div>
+      )}
+    </section>
+  );
+}
+```
 
 **체크포인트**:
 
@@ -579,10 +844,32 @@ public Page<PostListResponse> getPosts(Long boardId, Pageable pageable) {
 
 ### 9-3. 회귀 테스트
 
-`should_preserveOrderAndMetadata_onOffsetPage_withLateJoin` — 5건 생성 후 2페이지
-(size 2)를 요청해 ① 순서(최신순 3번째·2번째 글), ② totalElements=5,
-totalPages=3, ③ 작성자 매핑을 단정한다. **순서 복원 로직을 빼먹으면 이 테스트만
-떨어진다** — IN의 무순서가 이 개선의 유일한 함정이라서다.
+**순서 복원 로직을 빼먹으면 이 테스트만 떨어진다** — IN의 무순서가 이 개선의
+유일한 함정이라서다.
+
+```java
+// 단계 16 사후 개선(지연 조인) 회귀 테스트 — offset 목록이 2단계 조회(id 페이징 →
+// IN 로딩)로 바뀌어도, 순서·페이지 메타데이터·매핑이 기존 계약과 동일해야 한다.
+// IN 결과는 순서가 없으므로 "순서 복원" 로직이 빠지면 이 테스트가 잡는다.
+@Test
+void should_preserveOrderAndMetadata_onOffsetPage_withLateJoin() {
+  List<Long> ids = createPosts(5);
+
+  var pageable = org.springframework.data.domain.PageRequest.of(
+      1, 2, org.springframework.data.domain.Sort.by(
+          org.springframework.data.domain.Sort.Order.desc("createdAt"),
+          org.springframework.data.domain.Sort.Order.desc("id")));
+  Page<PostListResponse> page = postService.getPosts(board.getId(), pageable);
+
+  // 최신순 전체 [4,3,2,1,0] 중 2페이지(index 1) → ids[2], ids[1]
+  assertThat(page.getContent()).extracting(PostListResponse::id)
+      .containsExactly(ids.get(2), ids.get(1));
+  assertThat(page.getContent()).extracting(PostListResponse::authorUsername)
+      .containsOnly("author1");
+  assertThat(page.getTotalElements()).isEqualTo(5);
+  assertThat(page.getTotalPages()).isEqualTo(3);
+}
+```
 
 ### 9-4. 측정 결과
 
@@ -612,6 +899,15 @@ totalPages=3, ③ 작성자 매핑을 단정한다. **순서 복원 로직을 �
 
 건드리지 않은 것: SecurityConfig(기존 permitAll 승계), offset API(비교·병행 유지),
 docker-compose·배포 스크립트(스키마는 ddl-auto가 알아서).
+
+전체 diff가 필요할 때의 기준 커밋:
+
+| 커밋 | 내용 |
+|------|------|
+| `1dc2ab8` | 작업 1~7 — keyset API + React 무한스크롤 (본편) |
+| `291aeb0` | 작업 8-1 — Auditing 마이크로초 절단 fix |
+| `e3eb2f9` | 작업 9 — offset 지연 조인 |
+| `b4b7c54` | (후속 진화) 하이브리드 페이지네이션 — [[FRONTEND-PAGINATION]] |
 
 다음 후보([[DB-PERFORMANCE]] §5): 목록 첫 페이지 Redis TTL 캐시 — 단계 15의 TTL
 개념이 토큰에서 캐시로 재사용되는 지점.
