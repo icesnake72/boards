@@ -467,6 +467,41 @@ curl -w "%{http_code}" "...?size=101"      # → 400
 **③ 브라우저 E2E** (100만 건 게시판에서): 스크롤 바닥 도달마다 20 → 40 → 60건으로
 증가, 60건 전부 유니크(중복·누락 없음), 센티널 문구 정상 표시.
 
+### 8-1. 사후 함정 — CI에서만 터진 시계 정밀도 버그
+
+배포 파이프라인의 test 잡(Linux)에서 `should_walkAllPages_withoutOverlapOrGap`이
+실패했다 — 로컬(macOS)에선 verify.sh를 두 번 통과한 테스트다. 원인은 OS별 시계
+정밀도:
+
+| | macOS (로컬) | Linux (CI·운영) |
+|------|------|------|
+| `LocalDateTime.now()` | 마이크로초 | **나노초** |
+| DB 컬럼(DATETIME(6)/H2) | 마이크로초 | 마이크로초 |
+| 메모리 엔티티 = DB 저장값? | 일치 | **불일치** (나노가 잘림) |
+
+keyset 커서는 응답의 createdAt을 **그대로 되돌려 등호 비교**하는 구조라, 메모리
+값(나노)과 저장값(마이크로)이 다르면 `stored < cursor`가 참이 되어 **커서 행
+자신이 다음 페이지에 다시 나온다**(중복). Linux인 CI가 운영에서 터질 버그를
+먼저 잡아준 셈이다.
+
+수정은 값의 정본을 저장 정밀도에 맞추는 것 — `JpaAuditingConfig`에
+`DateTimeProvider`를 등록해 Auditing 시각을 마이크로초로 절단한다:
+
+```java
+@Configuration
+@EnableJpaAuditing(dateTimeProviderRef = "auditingDateTimeProvider")
+public class JpaAuditingConfig {
+
+  @Bean
+  public DateTimeProvider auditingDateTimeProvider() {
+    return () -> Optional.of(LocalDateTime.now().truncatedTo(ChronoUnit.MICROS));
+  }
+}
+```
+
+> 중요: "로컬에서 통과 = 안전"이 아니다. 시계·정렬·로케일처럼 OS에 기대는 값은
+> CI(운영과 같은 OS)의 실패가 더 정확한 신호다.
+
 ---
 
 ## 부록: 최종 변경 요약
