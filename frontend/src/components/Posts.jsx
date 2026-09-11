@@ -249,7 +249,10 @@ export default function Posts({ board, user, onOpenPost, onBack }) {
               {p.thumbnailUrl && <img className="thumb" src={p.thumbnailUrl} alt="" />}
               <div className="post-row-body">
                 <p className="post-title">{p.title}</p>
-                <p className="post-meta">{p.authorUsername} · 조회 {p.viewCount} · {formatDate(p.createdAt)}</p>
+                <p className="post-meta">
+                {p.authorUsername} · 조회 <span className="num">{p.viewCount}</span>
+                {" · "}<span className="num">{formatDate(p.createdAt)}</span>
+              </p>
               </div>
               <span className="chevron">›</span>
             </li>
