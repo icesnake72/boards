@@ -15,7 +15,27 @@
 # fail-fast 검증에서 기동이 실패하므로, 먼저 `cp .env.example .env` 후 값을 채운다.
 name: board
 
+# ../chat 스택 포함 — chat backend의 compose를 이 프로젝트로 끌어와 `docker compose up`
+# 한 번으로 board+chat 전체를 기동한다. 포함된 파일의 상대 경로(build context, env_file)는
+# 그 파일이 있는 디렉토리(../chat) 기준으로 해석된다.
+#   - local.yml: 로컬 전용 포트 오픈(127.0.0.1:8092). 서버 반영 시 포함 여부 재검토.
+#   - env_file: chat compose의 ${DB_NAME:-chat} 등 변수 치환을 chat/.env 값으로 고정 —
+#     board/.env(서버에선 DB_NAME=board 포함)가 chat 쪽 변수를 오염시키지 않게 한다.
+# 주의: ../chat 이 없는 환경에선 compose 명령 자체가 실패한다(서버 배포 전 ~/chat 준비 필수).
+include:
+  - path:
+      - ../chat/docker-compose.yml
+      - ../chat/docker-compose.local.yml
+    env_file: ../chat/.env
+
 services:
+  # include된 chat-app의 안전핀: 변수 치환 우선순위상 board 프로젝트의 .env(서버에선
+  # DB_NAME=board 포함)가 chat compose의 ${DB_NAME:-chat}까지 덮어쓴다 — 그대로 두면
+  # chat이 board DB에 붙는 사고가 난다. 여기서 리터럴로 고정해 병합 최종값을 확정한다.
+  chat-app:
+    environment:
+      DB_NAME: chat
+
   app:
     build:
       context: .
