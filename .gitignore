@@ -55,3 +55,11 @@ out/
 ### 프론트엔드 산출물 — 의존성·빌드 결과는 커밋하지 않는다 ###
 node_modules/
 frontend/dist/
+
+### 로컬 전용 compose 오버라이드 (chat-app 8092 포트 개방 등) — 서버엔 없어야 한다 ###
+docker-compose.override.yml
+
+### 도구 작업 부산물 — 형상관리 대상 아님 ###
+.omc/
+.playwright-mcp/
+docs/.obsidian/
