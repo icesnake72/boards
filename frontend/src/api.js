@@ -191,3 +191,51 @@ export async function reactToComment(commentId, type) {
     body: JSON.stringify({ type }),
   });
 }
+
+// ── 채팅(chat-app: /api/v1/chat 프록시) ─────────────────────────────────────
+// STOMP CONNECT 프레임은 fetch 래퍼를 못 타므로 토큰 접근자를 따로 연다.
+// 노출 범위는 chatSocket.js 하나 — 다른 컴포넌트는 여전히 authFetch만 쓴다.
+export function getAccessToken() {
+  return accessToken;
+}
+
+// STOMP ERROR(TOKEN_EXPIRED) 재연결 직전에 호출 — 성공 시 true
+export async function refreshAccessToken() {
+  return reissue();
+}
+
+export async function getChatRooms(page = 0, size = 50) {
+  return jsonFetch(`/api/v1/chat/rooms?page=${page}&size=${size}`);
+}
+
+export async function createChatRoom(name, description) {
+  return jsonFetch("/api/v1/chat/rooms", {
+    method: "POST",
+    body: JSON.stringify({ name, description }),
+  });
+}
+
+export async function deleteChatRoom(roomId) {
+  return jsonFetch(`/api/v1/chat/rooms/${roomId}`, { method: "DELETE" });
+}
+
+// 입장은 멱등(이미 멤버면 그대로 성공) — 방 클릭 = join 후 진입으로 단순화
+export async function joinChatRoom(roomId) {
+  return jsonFetch(`/api/v1/chat/rooms/${roomId}/join`, { method: "POST" });
+}
+
+export async function leaveChatRoom(roomId) {
+  return jsonFetch(`/api/v1/chat/rooms/${roomId}/leave`, { method: "DELETE" });
+}
+
+export async function getChatMembers(roomId) {
+  return jsonFetch(`/api/v1/chat/rooms/${roomId}/members`);
+}
+
+// 이력은 keyset: 첫 호출은 before 없이 최신 50건, 이전 페이지는 응답의 nextBefore를 넘긴다.
+// 응답 { messages(오래된 순), hasMore, nextBefore }
+export async function getChatMessages(roomId, before = null, size = 50) {
+  const params = new URLSearchParams({ size });
+  if (before != null) params.set("before", before);
+  return jsonFetch(`/api/v1/chat/rooms/${roomId}/messages?${params}`);
+}

@@ -35,6 +35,10 @@ services:
   chat-app:
     environment:
       DB_NAME: chat
+      # WS 핸드셰이크 Origin 검사: 브라우저는 기본 포트(80/443)를 Origin에서 생략하므로
+      # 포트 없는 http://localhost 도 허용해야 한다(기본값 http://localhost:* 만으로는 403).
+      # 서버 반영 시 https://sbs.alldayai.org 를 여기에 추가해야 한다.
+      APP_WS_ALLOWED_ORIGINS: http://localhost,http://localhost:*
 
   app:
     build:

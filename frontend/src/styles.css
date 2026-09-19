@@ -699,6 +699,185 @@ main.wrap {
   font-size: 11.5px;
 }
 
+/* ── 채팅 — 로비는 board 카드 재사용, 방은 하나의 white 패널 안에서 완결 ──── */
+
+.main-nav { display: flex; gap: 6px; }
+
+.chat-room-meta {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.online-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--state-success);
+  flex: 0 0 auto;
+}
+
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  /* 메시지 영역이 남는 높이를 전부 차지 — 헤더·툴바를 뺀 화면을 쓴다 */
+  height: calc(100dvh - 230px);
+  min-height: 420px;
+}
+
+.chat-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 16px 8px;
+}
+
+.chat-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--text-title);
+  line-height: 1.3;
+}
+
+.chat-desc {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* 연결 상태 배지 — 상태 텍스트만, 색은 의미가 있을 때만(끊김=danger) */
+.chat-conn {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+.chat-conn.connected { color: var(--blue-hover); border-color: rgba(74, 134, 255, 0.4); }
+.chat-conn.offline,
+.chat-conn.unauthorized { color: var(--state-danger); border-color: rgba(255, 73, 73, 0.4); }
+
+.chat-members {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 0 16px 10px;
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.chat-member {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-pill);
+  padding: 2px 10px;
+}
+
+.chat-member .online-dot { background: var(--gray-30); }
+.chat-member.online { color: var(--text-title); }
+.chat-member.online .online-dot { background: var(--state-success); }
+
+.chat-messages {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--surface-page);
+}
+
+.chat-older { align-self: center; }
+
+.chat-msg {
+  max-width: 82%;
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.chat-msg.mine { align-self: flex-end; align-items: flex-end; }
+
+.chat-msg-sender {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin: 0 4px 2px;
+}
+
+.chat-bubble {
+  background: var(--surface-card);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-lg);
+  border-top-left-radius: var(--radius-xs);
+  padding: 8px 13px;
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 내 말풍선 — selected 규정(10% blue fill)의 에코. Blue 원색 배경은 쓰지 않는다 */
+.chat-msg.mine .chat-bubble {
+  background: rgba(74, 134, 255, 0.1);
+  border-color: rgba(74, 134, 255, 0.35);
+  border-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-xs);
+}
+
+.chat-msg-time {
+  color: var(--gray-30);
+  font-size: 10.5px;
+  margin: 3px 4px 0;
+}
+
+.chat-system {
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-pill);
+  padding: 2px 12px;
+}
+
+.chat-input {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border-hairline);
+  background: var(--surface-card);
+}
+
+.chat-input input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  padding: 9px 12px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--text-body);
+}
+
 /* ── 태블릿 이상(≥768px): 데스크탑이 추가로 얻는 것들 ────────────────────── */
 
 @media (min-width: 768px) {
@@ -742,6 +921,14 @@ main.wrap {
   .inline-form { padding: 24px; }
 
   .top-btn { right: 28px; bottom: 84px; }
+
+  .chat-panel { height: calc(100dvh - 260px); min-height: 480px; }
+  .chat-head { padding: 18px 20px 10px; }
+  .chat-title { font-size: 19px; }
+  .chat-members { padding: 0 20px 12px; }
+  .chat-messages { padding: 18px 20px; }
+  .chat-msg { max-width: 70%; }
+  .chat-input { padding: 12px 16px; }
 }
 
 /* ── 데스크탑(≥1120px): 64px 거터의 1200px 컨테이너 ──────────────────────── */

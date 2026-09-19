@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { getMe, silentLogin } from "./api.js";
 import AuthBar from "./components/AuthBar.jsx";
 import Boards from "./components/Boards.jsx";
+import ChatHub from "./components/ChatHub.jsx";
 import Posts from "./components/Posts.jsx";
 import PostDetail from "./components/PostDetail.jsx";
 
@@ -40,6 +41,14 @@ export default function App() {
             </h1>
             <p className="subtitle">React(Vite) + Nginx 리버스 프록시 — 로그인·글·댓글·반응까지 백엔드 연동 테스트</p>
           </div>
+          <nav className="main-nav" aria-label="주 메뉴">
+            <button type="button"
+              className={`btn tiny${view.name !== "chat" ? " active" : ""}`}
+              onClick={() => setView({ name: "boards" })}>게시판</button>
+            <button type="button"
+              className={`btn tiny${view.name === "chat" ? " active" : ""}`}
+              onClick={() => setView({ name: "chat" })}>채팅</button>
+          </nav>
           {ready && (
             <AuthBar user={user} onAuthed={refreshUser} onLoggedOut={() => setUser(null)} />
           )}
@@ -59,6 +68,7 @@ export default function App() {
           <PostDetail postId={view.postId} user={user}
             onBack={() => setView({ name: "posts", board: view.board })} />
         )}
+        {view.name === "chat" && ready && <ChatHub user={user} />}
       </main>
 
       <footer className="site-footer">
