@@ -39,7 +39,12 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    # 2026-09-20 사고: 힙 상한 없는 두 번째 JVM이 2GB 무스왑 서버의 메모리를 고갈시켜
+    # 서버 전체(SSH 포함)가 멎었다. JVM 기본 최대 힙은 RAM/4=512MB까지 자란다.
+    # 힙 상한(-Xmx) + 컨테이너 상한(mem_limit) 이중 방어 — 초과 시 이 컨테이너만 죽는다.
+    mem_limit: 512m
     environment:
+      JAVA_TOOL_OPTIONS: "-Xmx224m -XX:MaxMetaspaceSize=128m"
       DB_NAME: chat
       # WS 핸드셰이크 Origin 검사: 브라우저는 기본 포트(80/443)를 Origin에서 생략하므로
       # 포트 없는 형태(운영 도메인, http://localhost)를 허용해야 한다
