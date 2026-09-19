@@ -11,8 +11,12 @@
 #
 # 전제: 저장소 루트에서 실행되고, 아래 환경변수가 주입되어 있다(워크플로 envs:):
 #   KAKAO_REST_API, KAKAO_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
-#   DB_NAME, DB_USERNAME, DB_PASSWORD, GHCR_USER, GHCR_TOKEN
+#   DB_NAME, DB_USERNAME, DB_PASSWORD, JWT_SECRET, GHCR_USER, GHCR_TOKEN
 #   (GHCR_TOKEN은 워크플로의 내장 GITHUB_TOKEN — 실행 중에만 유효한 단명 토큰)
+#
+# chat 스택: compose가 ../chat/docker-compose.yml을 include하므로, compose를 부르기
+# 전에 ~/chat 저장소와 ~/chat/.env가 준비되어야 한다(아래 "chat 스택 준비" 블록).
+# JWT_SECRET은 board와 chat이 같은 값을 읽어야 토큰 검증이 맞물린다.
 # ────────────────────────────────────────────────────────────────────────────
 set -euo pipefail   # 오류·미정의변수·파이프 실패 시 즉시 중단
 
@@ -32,6 +36,19 @@ SITE_ADDRESS=sbs.alldayai.org
 # HTTPS 최종 하드닝: refresh 쿠키를 https에서만 전송(도청 시 쿠키 탈취 차단).
 # 로컬(http)은 compose 기본값 false 유지 — 서버만 켠다.
 APP_REFRESH_COOKIE_SECURE=true
+# chat 연동: board-app이 yaml 기본값 대신 Secret 값을 읽게 명시 주입한다.
+# 이후 값 교체가 필요하면 GitHub Secret만 바꾸면 board·chat이 함께 따라온다.
+JWT_SECRET=${JWT_SECRET}
+EOF
+
+echo "▶ chat 스택 준비 (compose include 대상 — compose 실행 전에 있어야 한다)"
+[ -d ~/chat/.git ] || git clone https://github.com/icesnake72/chat.git ~/chat
+git -C ~/chat fetch --all && git -C ~/chat reset --hard origin/main
+cat > ~/chat/.env <<EOF
+JWT_SECRET=${JWT_SECRET}
+DB_NAME=chat
+DB_USERNAME=${DB_USERNAME}
+DB_PASSWORD=${DB_PASSWORD}
 EOF
 
 echo "▶ 전용 네트워크·mysql-8 준비(없으면 생성, 있으면 그대로)"
@@ -49,6 +66,10 @@ echo "▶ DB 응답 대기(최대 60초) — 앱보다 DB가 먼저 준비되어
 timeout 60 bash -c \
   'until docker exec mysql-8 mysqladmin ping -uroot -p"$DB_PASSWORD" --silent 2>/dev/null; do sleep 2; done'
 echo "  mysql-8 ready"
+
+echo "▶ chat 데이터베이스 준비(없으면 생성 — board DB와 같은 인스턴스, 다른 스키마)"
+docker exec mysql-8 mysql -uroot -p"${DB_PASSWORD}" \
+  -e "CREATE DATABASE IF NOT EXISTS chat CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
 echo "▶ GHCR 로그인(워크플로 단명 토큰 — 패키지가 비공개여도 pull 가능)"
 echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin

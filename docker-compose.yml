@@ -18,14 +18,15 @@ name: board
 # ../chat 스택 포함 — chat backend의 compose를 이 프로젝트로 끌어와 `docker compose up`
 # 한 번으로 board+chat 전체를 기동한다. 포함된 파일의 상대 경로(build context, env_file)는
 # 그 파일이 있는 디렉토리(../chat) 기준으로 해석된다.
-#   - local.yml: 로컬 전용 포트 오픈(127.0.0.1:8092). 서버 반영 시 포함 여부 재검토.
 #   - env_file: chat compose의 ${DB_NAME:-chat} 등 변수 치환을 chat/.env 값으로 고정 —
 #     board/.env(서버에선 DB_NAME=board 포함)가 chat 쪽 변수를 오염시키지 않게 한다.
-# 주의: ../chat 이 없는 환경에선 compose 명령 자체가 실패한다(서버 배포 전 ~/chat 준비 필수).
+#   - 로컬 전용 포트 개방(127.0.0.1:8092)은 gitignore된 docker-compose.override.yml이
+#     담당한다(compose가 자동 병합). 서버에는 그 파일이 없어 포트가 닫힌 채 뜬다.
+# 주의: ../chat 이 없는 환경에선 compose 명령 자체가 실패한다 — 서버에서는 deploy.sh가
+# ~/chat clone·.env 생성까지 처리한 뒤에 compose를 부른다.
 include:
   - path:
       - ../chat/docker-compose.yml
-      - ../chat/docker-compose.local.yml
     env_file: ../chat/.env
 
 services:
@@ -33,12 +34,17 @@ services:
   # DB_NAME=board 포함)가 chat compose의 ${DB_NAME:-chat}까지 덮어쓴다 — 그대로 두면
   # chat이 board DB에 붙는 사고가 난다. 여기서 리터럴로 고정해 병합 최종값을 확정한다.
   chat-app:
+    # denylist 조회가 fail-closed(Redis 없으면 인증 전부 500)라 Redis가 먼저 떠야 한다.
+    # chat 자체 compose에는 board의 redis가 안 보이므로 병합 후인 여기서만 걸 수 있다.
+    depends_on:
+      redis:
+        condition: service_healthy
     environment:
       DB_NAME: chat
       # WS 핸드셰이크 Origin 검사: 브라우저는 기본 포트(80/443)를 Origin에서 생략하므로
-      # 포트 없는 http://localhost 도 허용해야 한다(기본값 http://localhost:* 만으로는 403).
-      # 서버 반영 시 https://sbs.alldayai.org 를 여기에 추가해야 한다.
-      APP_WS_ALLOWED_ORIGINS: http://localhost,http://localhost:*
+      # 포트 없는 형태(운영 도메인, http://localhost)를 허용해야 한다
+      # (기본값 http://localhost:* 만으로는 403 — 로컬 실측으로 확인).
+      APP_WS_ALLOWED_ORIGINS: https://sbs.alldayai.org,http://localhost,http://localhost:*
 
   app:
     build:

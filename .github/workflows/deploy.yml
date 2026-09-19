@@ -12,10 +12,11 @@
 # 인증: 내장 GITHUB_TOKEN 하나로 GHCR push(러너)와 pull(서버 docker login)을
 # 모두 처리한다 — 새 Secret 불필요. permissions.packages: write 가 그 근거.
 #
-# 필요한 GitHub Secrets(기존 그대로):
+# 필요한 GitHub Secrets:
 #   LIGHTSAIL_HOST, LIGHTSAIL_USER(ec2-user), LIGHTSAIL_SSH_KEY,
 #   KAKAO_REST_API, KAKAO_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
-#   DB_NAME, DB_USERNAME, DB_PASSWORD
+#   DB_NAME, DB_USERNAME, DB_PASSWORD,
+#   JWT_SECRET (chat 연동 — board·chat이 같은 값으로 토큰을 검증한다)
 # ────────────────────────────────────────────────────────────────────────────
 name: Deploy to Lightsail
 
@@ -109,6 +110,7 @@ jobs:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USERNAME: ${{ secrets.DB_USERNAME }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}     # board·chat 공용 — deploy.sh가 양쪽 .env에 넣는다
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # 서버가 GHCR pull할 때 쓰는 단명 토큰
         with:
@@ -116,7 +118,7 @@ jobs:
           username: ${{ secrets.LIGHTSAIL_USER }}
           key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
           command_timeout: 10m       # 빌드가 없어졌으므로 10분이면 충분(pull+기동)
-          envs: KAKAO_REST_API,KAKAO_SECRET,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,DB_NAME,DB_USERNAME,DB_PASSWORD,GHCR_USER,GHCR_TOKEN
+          envs: KAKAO_REST_API,KAKAO_SECRET,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,DB_NAME,DB_USERNAME,DB_PASSWORD,JWT_SECRET,GHCR_USER,GHCR_TOKEN
           # 원격에서 할 일: (AL2023 부트스트랩) → 코드 최신화 → 배포 스크립트 실행
           script: |
             set -e
