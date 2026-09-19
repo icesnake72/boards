@@ -12,14 +12,33 @@ function formatDate(iso) {
   return `${d.getFullYear()}.${p(d.getMonth() + 1)}.${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+// 좋아요/싫어요 아이콘 — 브랜드 규격(2px stroke, round cap/join, currentColor).
+// 이모지는 브랜드 지침상 금지라 인라인 SVG로 그린다(외부 아이콘 폰트 없음).
+function ThumbIcon({ down }) {
+  return (
+    <svg
+      viewBox="0 0 24 24" width="14" height="14" fill="none"
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+      style={down ? { transform: "rotate(180deg)" } : undefined} aria-hidden="true"
+    >
+      <path d="M7 10v12" />
+      <path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z" />
+    </svg>
+  );
+}
+
 // 반응 버튼 한 쌍 — myReaction이면 강조. onReact(type)는 토글/전환을 서버에 위임.
 function Reactions({ likeCount, dislikeCount, myReaction, onReact, disabled }) {
   return (
     <span className="reactions">
       <button type="button" disabled={disabled} onClick={() => onReact("LIKE")}
-        className={`btn tiny${myReaction === "LIKE" ? " active" : ""}`}>👍 {likeCount}</button>
+        className={`btn tiny${myReaction === "LIKE" ? " active" : ""}`}>
+        <ThumbIcon /> <span className="num">{likeCount}</span>
+      </button>
       <button type="button" disabled={disabled} onClick={() => onReact("DISLIKE")}
-        className={`btn tiny${myReaction === "DISLIKE" ? " active" : ""}`}>👎 {dislikeCount}</button>
+        className={`btn tiny${myReaction === "DISLIKE" ? " active" : ""}`}>
+        <ThumbIcon down /> <span className="num">{dislikeCount}</span>
+      </button>
     </span>
   );
 }
@@ -33,7 +52,7 @@ function Comment({ c, user, onReply, onDelete, onReact, depth = 0 }) {
     <li className={depth === 0 ? "comment" : "comment reply"}>
       <div className="comment-head">
         <strong>{c.authorUsername}</strong>
-        <span className="post-meta">{formatDate(c.createdAt)}</span>
+        <span className="post-meta num">{formatDate(c.createdAt)}</span>
       </div>
       <p className="comment-content">{c.deleted ? "삭제된 댓글입니다" : c.content}</p>
       {!c.deleted && (
@@ -126,7 +145,8 @@ export default function PostDetail({ postId, user, onBack }) {
       <article className="post-detail">
         <h2>{post.title}</h2>
         <p className="post-meta">
-          {post.authorUsername} · 조회 {post.viewCount} · {formatDate(post.createdAt)} · {post.boardName}
+          {post.authorUsername} · 조회 <span className="num">{post.viewCount}</span>
+          {" · "}<span className="num">{formatDate(post.createdAt)}</span> · {post.boardName}
         </p>
         <p className="post-content">{post.content}</p>
         {post.images?.length > 0 && (
@@ -138,7 +158,9 @@ export default function PostDetail({ postId, user, onBack }) {
           myReaction={post.myReaction} disabled={!user} onReact={handlePostReact} />
       </article>
 
-      <h3 className="section-title">댓글 {comments.length > 0 ? `(${comments.length})` : ""}</h3>
+      <h3 className="section-title">
+        댓글 {comments.length > 0 && <span className="num">{comments.length}</span>}
+      </h3>
       {status && <div className="status">{status}</div>}
       <ul className="comment-list">
         {comments.map((c) => (

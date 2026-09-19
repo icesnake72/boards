@@ -1,0 +1,23 @@
+- generic [ref=f1e2]:
+  - banner [ref=f1e3]:
+    - generic [ref=f1e4]:
+      - generic [ref=f1e5]:
+        - heading "게시판" [level=1] [ref=f1e6] [cursor=pointer]
+        - paragraph [ref=f1e7]: React(Vite) + Nginx 리버스 프록시 — 로그인·글·댓글·반응까지 백엔드 연동 테스트
+      - generic [ref=f1e9]:
+        - textbox "아이디" [ref=f1e10]
+        - textbox "비밀번호" [ref=f1e11]
+        - button "로그인" [ref=f1e12] [cursor=pointer]
+        - button "회원가입" [ref=f1e13] [cursor=pointer]
+        - button "카카오 로그인" [ref=f1e14] [cursor=pointer]
+        - button "Google로 로그인" [ref=f1e17] [cursor=pointer]
+  - main [ref=f1e23]:
+    - generic [ref=f1e24]:
+      - button "새로고침" [ref=f1e26] [cursor=pointer]
+      - status [ref=f1e27]: 불러오는 중…
+      - list
+  - contentinfo [ref=f1e28]:
+    - generic [ref=f1e30]:
+      - text: "인증:"
+      - code [ref=f1e31]: Bearer(메모리) + httpOnly refresh 쿠키
+      - text: · 401이면 자동 재발급 후 재시도

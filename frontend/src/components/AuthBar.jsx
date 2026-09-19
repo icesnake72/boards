@@ -20,6 +20,9 @@ export default function AuthBar({ user, onAuthed, onLoggedOut }) {
   const [form, setForm] = useState({ username: "", password: "", email: "", nickname: "" });
   const [msg, setMsg] = useState(consumeOauthError);
   const [busy, setBusy] = useState(false);
+  // 모바일에선 로그인 폼을 접어 두고 버튼으로 펼친다(데스크탑은 CSS가 항상 펼침).
+  // 소셜 로그인 실패로 에러 메시지를 들고 돌아온 경우엔 펼친 채로 시작한다.
+  const [open, setOpen] = useState(() => Boolean(msg));
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
@@ -66,6 +69,15 @@ export default function AuthBar({ user, onAuthed, onLoggedOut }) {
 
   return (
     <div className="auth-bar">
+      <button
+        type="button"
+        className={`btn auth-toggle${open ? " active" : ""}`}
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        로그인
+      </button>
+      <div className={`auth-panel${open ? " open" : ""}`}>
       {mode === "login" ? (
         <form className="auth-form" onSubmit={handleLogin}>
           <input placeholder="아이디" value={form.username} onChange={set("username")} autoComplete="username" />
@@ -101,6 +113,7 @@ export default function AuthBar({ user, onAuthed, onLoggedOut }) {
         </form>
       )}
       {msg && <span className="auth-msg">{msg}</span>}
+      </div>
     </div>
   );
 }

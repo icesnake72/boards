@@ -34,7 +34,10 @@ export default function App() {
       <header className="site-header">
         <div className="wrap header-row">
           <div>
-            <h1 className="clickable" onClick={() => setView({ name: "boards" })}>게시판</h1>
+            <h1 className="clickable" onClick={() => setView({ name: "boards" })}>
+              All Day A<span className="brand-dot">.</span>I
+              <span className="wordmark-suffix">게시판</span>
+            </h1>
             <p className="subtitle">React(Vite) + Nginx 리버스 프록시 — 로그인·글·댓글·반응까지 백엔드 연동 테스트</p>
           </div>
           {ready && (

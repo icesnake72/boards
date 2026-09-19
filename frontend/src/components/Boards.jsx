@@ -38,7 +38,9 @@ export default function Boards({ user, onOpenBoard }) {
   return (
     <section>
       <div className="toolbar">
-        <span className="count">{boards.length > 0 ? `${boards.length}개` : ""}</span>
+        <span className="count">
+          {boards.length > 0 && <><span className="num">{boards.length}</span>개</>}
+        </span>
         <button type="button" className="btn" onClick={load}>새로고침</button>
       </div>
 
