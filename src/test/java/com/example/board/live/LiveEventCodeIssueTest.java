@@ -30,6 +30,7 @@ class LiveEventCodeIssueTest {
 
   @Mock LiveEventRepository eventRepository;
   @Mock QuestionRepository questionRepository;
+  @Mock PollRepository pollRepository;
   @Mock UserRepository userRepository;
   @Mock LiveCounterStore counterStore;
   @Mock LiveCodeGenerator codeGenerator;

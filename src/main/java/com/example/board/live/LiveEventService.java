@@ -8,6 +8,7 @@ import com.example.board.live.dto.LiveEventCreateRequest;
 import com.example.board.live.dto.LiveEventResponse;
 import com.example.board.live.dto.LivePayloads;
 import com.example.board.live.dto.LiveSnapshotResponse;
+import com.example.board.live.dto.PollResponse;
 import com.example.board.live.dto.QuestionResponse;
 import com.example.board.live.sse.LiveChangedEvent;
 import com.example.board.live.sse.LiveSseRegistry;
@@ -32,6 +33,7 @@ public class LiveEventService {
 
   private final LiveEventRepository eventRepository;
   private final QuestionRepository questionRepository;
+  private final PollRepository pollRepository;
   private final UserRepository userRepository;
   private final LiveCounterStore counterStore;
   private final LiveCodeGenerator codeGenerator;
@@ -59,7 +61,8 @@ public class LiveEventService {
     LiveEvent event = getEvent(code);
     return new LiveSnapshotResponse(
         LiveEventResponse.from(event, viewerId),
-        rankedQuestions(event.getId(), viewerId));
+        rankedQuestions(event.getId(), viewerId),
+        polls(event.getId(), viewerId));
   }
 
   // 멱등 — 이미 종료됐으면 아무 일도 하지 않는다.
@@ -97,6 +100,14 @@ public class LiveEventService {
             liked.contains(question.getId()),
             viewerId))
         .sorted(QuestionResponse.RANKING)
+        .toList();
+  }
+
+  private List<PollResponse> polls(Long eventId, Long viewerId) {
+    return pollRepository.findByEventIdOrderByIdDesc(eventId).stream()
+        .map(poll -> PollResponse.of(poll,
+            counterStore.voteCounts(poll.getId()),
+            counterStore.votedOptionId(poll.getId(), viewerId)))
         .toList();
   }
 

@@ -11,10 +11,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.example.board.auth.jwt.JwtTokenProvider;
 import com.example.board.live.counter.InMemoryLiveCounterStore;
 import com.example.board.live.dto.LiveEventCreateRequest;
+import com.example.board.live.dto.PollCreateRequest;
+import com.example.board.live.dto.PollResponse;
 import com.example.board.live.dto.QuestionCreateRequest;
 import com.example.board.user.Role;
 import com.example.board.user.User;
 import com.example.board.user.UserRepository;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,6 +39,7 @@ class LiveApiIntegrationTest {
   @Autowired JwtTokenProvider tokenProvider;
   @Autowired LiveEventService liveEventService;
   @Autowired LiveQuestionService liveQuestionService;
+  @Autowired LivePollService livePollService;
   @Autowired InMemoryLiveCounterStore counterStore;
 
   User host;
@@ -135,5 +139,41 @@ class LiveApiIntegrationTest {
             .header(HttpHeaders.AUTHORIZATION, hostToken))
         .andExpect(status().isNotFound())
         .andExpect(jsonPath("$.code").value("QUESTION_NOT_FOUND"));
+  }
+  @Test
+  void should_allowOnlyHost_toCreatePoll_andValidateOptions() throws Exception {
+    String body = "{\"title\": \"점심\", \"options\": [\"김밥\", \"라면\"]}";
+    mockMvc.perform(post("/api/v1/live/events/{code}/polls", code)
+            .header(HttpHeaders.AUTHORIZATION, guestToken)
+            .contentType(MediaType.APPLICATION_JSON).content(body))
+        .andExpect(status().isForbidden());
+    mockMvc.perform(post("/api/v1/live/events/{code}/polls", code)
+            .header(HttpHeaders.AUTHORIZATION, hostToken)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"title\": \"점심\", \"options\": [\"김밥\"]}"))
+        .andExpect(status().isBadRequest());
+    mockMvc.perform(post("/api/v1/live/events/{code}/polls", code)
+            .header(HttpHeaders.AUTHORIZATION, hostToken)
+            .contentType(MediaType.APPLICATION_JSON).content(body))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.options.length()").value(2));
+  }
+
+  @Test
+  void should_return409_onSecondVote() throws Exception {
+    PollResponse poll = livePollService.create(code,
+        new PollCreateRequest("점심", List.of("김밥", "라면")));
+    String body = "{\"optionId\": " + poll.options().get(0).id() + "}";
+
+    mockMvc.perform(post("/api/v1/live/polls/{id}/votes", poll.id())
+            .header(HttpHeaders.AUTHORIZATION, guestToken)
+            .contentType(MediaType.APPLICATION_JSON).content(body))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.myOptionId").value(poll.options().get(0).id()));
+    mockMvc.perform(post("/api/v1/live/polls/{id}/votes", poll.id())
+            .header(HttpHeaders.AUTHORIZATION, guestToken)
+            .contentType(MediaType.APPLICATION_JSON).content(body))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ALREADY_VOTED"));
   }
 }

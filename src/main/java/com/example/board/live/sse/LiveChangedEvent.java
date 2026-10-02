@@ -9,4 +9,7 @@ public record LiveChangedEvent(Long eventId, String name, Object payload) {
   public static final String QUESTION_LIKED = "question.liked";
   public static final String QUESTION_DELETED = "question.deleted";
   public static final String EVENT_CLOSED = "event.closed";
+  public static final String POLL_CREATED = "poll.created";
+  public static final String POLL_VOTED = "poll.voted";
+  public static final String POLL_CLOSED = "poll.closed";
 }
