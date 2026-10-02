@@ -3,12 +3,23 @@ package com.example.board.live.counter;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.Map;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-// 단계 18: 어떤 구현이든 지켜야 할 집계 규칙(Redis 구현은 로컬 E2E로 같은 계약을 실증).
+// 단계 18: 어떤 구현이든 지켜야 할 집계 규칙 — 여기선 InMemory, RedisLiveCounterStoreContractTest가 실제 Redis로 상속 실행.
 class LiveCounterStoreContractTest {
 
-  private final LiveCounterStore store = new InMemoryLiveCounterStore();
+  protected LiveCounterStore store;
+
+  @BeforeEach
+  void setUpStore() {
+    store = createStore();
+  }
+
+  // 하위 클래스가 다른 구현(Redis)을 끼워 같은 계약을 검증한다.
+  protected LiveCounterStore createStore() {
+    return new InMemoryLiveCounterStore();
+  }
 
   @Test
   void should_startAtZero_afterAddQuestion() {

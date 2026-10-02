@@ -3,27 +3,8 @@ import {
   closeLiveEvent, closePoll, createPoll, createQuestion, deleteQuestion,
   getLiveSnapshot, toggleQuestionLike, votePoll,
 } from "../api.js";
+import { applyLiveEvent, createSnapshotGate, mergePoll, rank } from "../liveState.js";
 import { openLiveStream } from "../liveStream.js";
-
-// 서버 QuestionResponse.RANKING과 같은 규칙: 좋아요 많은 순, 같으면 최신(id 큰) 순.
-function rank(questions) {
-  return [...questions].sort((a, b) => b.likeCount - a.likeCount || b.id - a.id);
-}
-
-// 득표수는 늘기만 한다 → SSE가 순서가 뒤바뀌어 도착해도 옵션별 큰 값을 취하면 최신 값이 남는다.
-// myOptionId는 내 REST 응답에만 있으므로(SSE는 null) 기존 값을 지킨다.
-function mergePoll(prev, next) {
-  const before = new Map(prev.options.map((o) => [o.id, o.count]));
-  const options = next.options.map((o) => ({ ...o, count: Math.max(o.count, before.get(o.id) ?? 0) }));
-  return {
-    ...prev,
-    ...next,
-    options,
-    totalVotes: options.reduce((sum, o) => sum + o.count, 0),
-    myOptionId: next.myOptionId ?? prev.myOptionId,
-    status: prev.status === "CLOSED" ? "CLOSED" : next.status,
-  };
-}
 
 const CONN_LABEL = {
   connecting: "연결 중…",
@@ -38,45 +19,24 @@ export default function LiveRoom({ code, onBack }) {
   const [msg, setMsg] = useState("");
   const [question, setQuestion] = useState("");
   const [pollForm, setPollForm] = useState({ title: "", options: ["", ""] });
+  // 스냅샷을 받는 동안 도착한 이벤트를 보관했다가 스냅샷 위에 다시 적용한다(liveState.js).
+  const [gate] = useState(createSnapshotGate);
 
   const load = useCallback(async () => {
+    const token = gate.begin();
     try {
-      const data = await getLiveSnapshot(code);
-      setSnap({ ...data, questions: rank(data.questions) });
+      const next = gate.finish(token, await getLiveSnapshot(code));
+      if (next) setSnap(next);      // null = 더 최근 요청이 있어 이 응답은 버린다
     } catch (err) {
+      gate.fail(token);
       setMsg(err.message);
     }
-  }, [code]);
+  }, [code, gate]);
 
   const applyEvent = useCallback((name, data) => {
-    setSnap((prev) => {
-      if (!prev) return prev;        // 스냅샷 도착 전 이벤트는 곧 올 스냅샷에 이미 반영돼 있다
-      switch (name) {
-        case "question.created":
-          if (prev.questions.some((q) => q.id === data.id)) return prev;
-          return { ...prev, questions: rank([...prev.questions, data]) };
-        case "question.liked":
-          return {
-            ...prev,
-            questions: rank(prev.questions.map((q) =>
-              (q.id === data.id ? { ...q, likeCount: data.likeCount } : q))),
-          };
-        case "question.deleted":
-          return { ...prev, questions: prev.questions.filter((q) => q.id !== data.id) };
-        case "poll.created":
-          if (prev.polls.some((p) => p.id === data.id)) return prev;
-          return { ...prev, polls: [data, ...prev.polls] };
-        case "poll.voted":
-          return { ...prev, polls: prev.polls.map((p) => (p.id === data.id ? mergePoll(p, data) : p)) };
-        case "poll.closed":
-          return { ...prev, polls: prev.polls.map((p) => (p.id === data.id ? { ...p, status: "CLOSED" } : p)) };
-        case "event.closed":
-          return { ...prev, event: { ...prev.event, status: "CLOSED" } };
-        default:
-          return prev;
-      }
-    });
-  }, []);
+    if (gate.offer(name, data)) return;
+    setSnap((prev) => (prev ? applyLiveEvent(prev, name, data) : prev));
+  }, [gate]);
 
   // 순서가 핵심: 스트림을 먼저 열고 connected를 받은 "뒤에" 스냅샷을 읽는다.
   // 스냅샷을 먼저 읽으면 [스냅샷 응답 ~ 구독 시작] 사이의 변화를 영영 놓친다.

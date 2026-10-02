@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { createLiveEvent, getLiveSnapshot, getMyLiveEvents } from "../api.js";
+import { sanitizeJoinCode } from "../liveState.js";
 import LiveRoom from "./LiveRoom.jsx";
 
 // 단계 18: 라이브 입구 — 참여 코드로 들어가거나, 이벤트를 만들어 진행자가 된다.
@@ -18,7 +19,7 @@ export default function LiveHub({ user }) {
   async function handleJoin(e) {
     e.preventDefault();
     setMsg("");
-    const normalized = joinCode.trim().toUpperCase();
+    const normalized = sanitizeJoinCode(joinCode);
     try {
       await getLiveSnapshot(normalized);          // 없는 코드면 여기서 404 메시지
       setJoinCode("");
@@ -58,9 +59,10 @@ export default function LiveHub({ user }) {
       <form className="inline-form" onSubmit={handleJoin}>
         <strong>참여 코드로 입장</strong>
         <div className="row">
-          <input className="live-code-input" placeholder="예: K7M2QX" maxLength={6} required
+          {/* maxLength 대신 sanitizeJoinCode — 붙여넣은 " K7M2QX"가 공백 때문에 잘리지 않게 */}
+          <input className="live-code-input" placeholder="예: K7M2QX" required
             autoCapitalize="characters" value={joinCode}
-            onChange={(e) => setJoinCode(e.target.value)} />
+            onChange={(e) => setJoinCode(sanitizeJoinCode(e.target.value))} />
           <button className="btn primary">입장</button>
         </div>
       </form>
