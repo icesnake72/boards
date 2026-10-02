@@ -10,11 +10,11 @@ status: 완료
 
 > 1일차([[LIVE-POLL-WALKTHROUGH-DAY1]], 커밋 `edee6e0`)가 끝난 코드에서 시작한다. 개념 배경은 [[LIVE-POLL]].
 > 모든 코드 블록은 해당 작업 시점의 실제 커밋 파일에서 생성했다 — 투표 백엔드는 `2c57eee`·`2a30f7b`,
-> 화면은 `4824a49`, 수정은 `1ad06b3`. 커밋되지 않은 중간 버전(첫 `liveStream.js`)은 구현 계획 문서에서 가져왔다.
+> 화면은 `4824a49`, E2E 수정은 `1ad06b3`, 코드 리뷰 수정은 `95957ac`. 커밋되지 않은 중간 버전(첫 `liveStream.js`)은 구현 계획 문서에서 가져왔다.
 
 2일차가 끝나면 진행자가 객관식 투표를 열고, 참여자가 휴대폰으로 투표하면 진행자 화면의 결과 막대가 **실시간으로 자란다**.
 그리고 브라우저로 실제로 써 보다가 드러난 두 가지 결함 — **연결 끊김이 ERROR로 쌓이는 문제**와 **죽은 연결을 "연결됨"으로 믿는 문제** — 을
-테스트로 재현하고 고친다. 이 수정 과정이 2일차의 가장 중요한 학습 내용이다.
+테스트로 재현하고 고친다. 마지막으로 새 눈(코드 리뷰)이 찾은 세 문제까지 고친다. 이 수정 과정이 2일차의 가장 중요한 학습 내용이다.
 
 학습 목표 — 2일차를 마치면 다음을 할 수 있다.
 
@@ -47,7 +47,8 @@ flowchart TD
   subgraph FIX["E2E와 수정"]
     S13["Step 13 — 브라우저 E2E, 두 문제 발견"] --> S14["Step 14 — 수정 1: 연결 끊김 핸들러"]
     S14 --> S15["Step 15 — 수정 2: ping 이벤트 + watchdog"]
-    S15 --> S16["Step 16 — 최종 검증"]
+    S15 --> S16["Step 16 — 코드 리뷰가 찾은 세 문제"]
+    S16 --> S17["Step 17 — 최종 검증"]
   end
   S7 --> S8
   S12 --> S13
@@ -65,7 +66,8 @@ flowchart TD
 | 8~12 | `liveStream.js`, `LiveHub`, `LiveRoom` | `api.js`, `App.jsx`, `styles.css`, `nginx.conf` | API가 확정돼야 화면이 붙는다 |
 | 13 | — | — | 사람이 써 봐야 드러나는 문제가 있다 |
 | 14~15 | `ClientDisconnectHandlingTest` | `GlobalExceptionHandler`, `LiveSseRegistry`, `LiveChangedEvent`, `liveStream.js` | 발견한 문제를 RED → GREEN으로 |
-| 16 | — | — | 전체 회귀 + 기동 검증 |
+| 16 | `liveState.js`(+테스트), `RedisLiveCounterStoreContractTest` | `LiveRoom`, `LiveHub`, `package.json`, 계약 테스트 | 작성자가 못 본 것을 리뷰가 찾는다 |
+| 17 | — | — | 전체 회귀 + 기동 검증 |
 
 ---
 
@@ -2068,6 +2070,8 @@ function PollCard({ poll, canVote, canClose, onVote, onClose }) {
 }
 ```
 
+> 주의: `LiveRoom`은 Step 16에서 병합 규칙을 `liveState.js`로 분리하고 스냅샷 경합을 고친 최종 버전으로 바뀐다(코드 리뷰 지적). 여기는 실제 순서대로 첫 버전이다.
+
 | 파일 / 함수 | 출처 | 역할 |
 |-------------|------|------|
 | `LiveHub` | 이 Step에서 생성 | 입장·생성·목록 |
@@ -2665,26 +2669,802 @@ export function openLiveStream(code, { onConnected, onEvent, onStatus }) {
 
 ---
 
-## Step 16. 최종 검증
+## Step 16. 코드 리뷰가 찾은 세 문제
+
+**왜 지금, 무슨 의미인가.** 테스트·E2E를 모두 통과한 뒤에도, 코드를 처음 보는 리뷰어는 작성자가 놓친 것을 찾는다. 이 단계에서는 별도 리뷰어가 브랜치 전체를 읽고 Important 3건을 지적했다. 셋 다 같은 리듬 — **재현 테스트(RED) → 수정(GREEN) → 전체 회귀** — 으로 고친다.
+
+| 지적 | 증상 | 원인 |
+|------|------|------|
+| 1. 코드 붙여넣기 실패 | 슬라이드에서 `" K7M2QX"`를 복사해 붙이면 "찾을 수 없습니다" | `maxLength={6}`이 **공백 제거 전에** 7자를 6자로 잘라 `" K7M2Q"`가 된다 |
+| 2. 이벤트 유실 | 질문이 몰리는 순간, 방금 올라온 질문이 화면에서 사라진다 | 스냅샷 응답보다 먼저 도착한 SSE가 옛 상태에 적용됐다가 **스냅샷 교체로 덮인다**(첫 입장 땐 아예 버려짐) |
+| 3. Redis 구현 무검증 | Lua·TTL에 회귀 테스트가 없다 | 계약 테스트가 InMemory에만 돌았다 |
+
+### 개념: 스냅샷 관문(snapshot gate)
+
+```mermaid
+sequenceDiagram
+  participant B as 브라우저
+  participant S as 서버
+  B->>S: GET 스냅샷 (gate.begin — 이후 이벤트는 보관)
+  Note over S: 스냅샷을 DB·Redis에서 읽음
+  S-->>B: event question.created (스냅샷 이후 커밋)
+  Note over B: gate.offer — 보관만
+  S-->>B: 스냅샷 응답
+  Note over B: gate.finish — 스냅샷 위에 보관 이벤트 재적용
+```
+
+- 보관 이벤트를 다시 적용해도 안전한 이유: 병합 규칙이 **멱등**이다(created는 중복 무시, voted는 max, closed는 상태 덮기).
+- 재연결이 겹쳐 스냅샷 요청이 여러 개 나가면 **마지막 요청의 응답만** 반영한다(`latest` 토큰). 늦게 도착한 옛 응답이 새 상태를 덮지 못한다.
+
+### 개념: 의존성 없는 프론트 테스트 — `node --test`
+
+board 프론트에는 테스트 도구가 없다. 화면 규칙(정렬·병합·관문·코드 정리)을 React와 무관한 **순수 함수 모듈**로 빼면, Node 18+ 내장 test runner(`node:test`)만으로 테스트할 수 있다 — npm 패키지 추가 없음. `package.json`에 `"test": "node --test"` 한 줄.
+
+먼저 테스트(RED — 모듈이 없어 `ERR_MODULE_NOT_FOUND`):
+
+`frontend/src/liveState.test.js`
+
+```js
+// 단계 18: 라이브 화면 상태 규칙 — 의존성 없이 Node 내장 test runner로 실행한다(npm test).
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import {
+  applyLiveEvent, createSnapshotGate, mergePoll, rank, sanitizeJoinCode,
+} from "./liveState.js";
+
+const question = (id, likeCount = 0) => ({ id, content: `q${id}`, likeCount, likedByMe: false, mine: false });
+const poll = (id, counts, myOptionId = null) => ({
+  id,
+  title: "점심",
+  status: "OPEN",
+  options: counts.map((count, i) => ({ id: i + 1, text: `o${i + 1}`, count })),
+  totalVotes: counts.reduce((a, b) => a + b, 0),
+  myOptionId,
+});
+const snapshot = (questions = [], polls = []) => ({
+  event: { id: 1, code: "K7M2QX", status: "OPEN", host: false },
+  questions,
+  polls,
+});
+
+test("붙여넣은 코드의 공백을 지우고 대문자 6자로 맞춘다", () => {
+  assert.equal(sanitizeJoinCode(" k7m2qx "), "K7M2QX");
+  assert.equal(sanitizeJoinCode(" K7M2QX"), "K7M2QX");
+  assert.equal(sanitizeJoinCode("K7 M2 QX 9"), "K7M2QX");
+});
+
+test("좋아요 많은 순, 같으면 최신(id 큰) 순", () => {
+  assert.deepEqual(rank([question(1, 0), question(2, 3), question(3, 0)]).map((q) => q.id), [2, 3, 1]);
+});
+
+test("득표수는 옵션별 큰 값을 취하고 내 선택은 지킨다", () => {
+  const merged = mergePoll(poll(7, [2, 1], 1), poll(7, [1, 3], null));
+  assert.deepEqual(merged.options.map((o) => o.count), [2, 3]);
+  assert.equal(merged.totalVotes, 5);
+  assert.equal(merged.myOptionId, 1);
+});
+
+test("이미 있는 질문의 created 이벤트는 중복 추가하지 않는다", () => {
+  const state = snapshot([question(1)]);
+  assert.equal(applyLiveEvent(state, "question.created", question(1)).questions.length, 1);
+});
+
+test("스냅샷을 받는 동안 도착한 이벤트는 스냅샷 위에 다시 적용된다", () => {
+  const gate = createSnapshotGate();
+  const token = gate.begin();
+  assert.equal(gate.offer("question.created", question(9)), true);   // 버퍼에 보관
+
+  const state = gate.finish(token, snapshot([question(1)]));
+
+  assert.deepEqual(state.questions.map((q) => q.id), [9, 1]);
+});
+
+test("스냅샷을 받는 중이 아니면 이벤트를 보관하지 않는다", () => {
+  const gate = createSnapshotGate();
+  assert.equal(gate.offer("question.created", question(9)), false);
+});
+
+test("늦게 도착한 옛 스냅샷 응답은 버린다", () => {
+  const gate = createSnapshotGate();
+  const first = gate.begin();
+  const second = gate.begin();
+
+  assert.equal(gate.finish(first, snapshot([question(1)])), null);
+  assert.deepEqual(gate.finish(second, snapshot([question(2)])).questions.map((q) => q.id), [2]);
+});
+
+test("스냅샷 요청이 실패하면 보관 중이던 이벤트를 비우고 다시 실시간 모드로 돌아간다", () => {
+  const gate = createSnapshotGate();
+  const token = gate.begin();
+  gate.offer("question.created", question(9));
+
+  gate.fail(token);
+
+  assert.equal(gate.offer("question.created", question(10)), false);
+});
+```
+
+순수 함수 모듈(GREEN):
+
+`frontend/src/liveState.js`
+
+```js
+// 단계 18: 라이브 화면 상태 규칙(순수 함수) — React 없이 테스트할 수 있게 LiveRoom에서 분리했다.
+
+// 참여 코드는 6자 — 붙여넣은 값의 공백을 먼저 지운 뒤 자른다.
+// (input의 maxLength로 자르면 " K7M2QX"가 " K7M2Q"로 잘려 공백 제거 전에 글자를 잃는다)
+export function sanitizeJoinCode(value) {
+  return value.replace(/\s/g, "").toUpperCase().slice(0, 6);
+}
+
+// 서버 QuestionResponse.RANKING과 같은 규칙: 좋아요 많은 순, 같으면 최신(id 큰) 순.
+export function rank(questions) {
+  return [...questions].sort((a, b) => b.likeCount - a.likeCount || b.id - a.id);
+}
+
+// 득표수는 늘기만 한다 → SSE가 순서가 뒤바뀌어 도착해도 옵션별 큰 값을 취하면 최신 값이 남는다.
+// myOptionId는 내 REST 응답에만 있으므로(SSE는 null) 기존 값을 지킨다.
+export function mergePoll(prev, next) {
+  const before = new Map(prev.options.map((o) => [o.id, o.count]));
+  const options = next.options.map((o) => ({ ...o, count: Math.max(o.count, before.get(o.id) ?? 0) }));
+  return {
+    ...prev,
+    ...next,
+    options,
+    totalVotes: options.reduce((sum, o) => sum + o.count, 0),
+    myOptionId: next.myOptionId ?? prev.myOptionId,
+    status: prev.status === "CLOSED" ? "CLOSED" : next.status,
+  };
+}
+
+// SSE 이벤트 하나를 화면 상태에 반영한 새 상태를 돌려준다(원본 불변).
+export function applyLiveEvent(state, name, data) {
+  switch (name) {
+    case "question.created":
+      if (state.questions.some((q) => q.id === data.id)) return state;
+      return { ...state, questions: rank([...state.questions, data]) };
+    case "question.liked":
+      return {
+        ...state,
+        questions: rank(state.questions.map((q) =>
+          (q.id === data.id ? { ...q, likeCount: data.likeCount } : q))),
+      };
+    case "question.deleted":
+      return { ...state, questions: state.questions.filter((q) => q.id !== data.id) };
+    case "poll.created":
+      if (state.polls.some((p) => p.id === data.id)) return state;
+      return { ...state, polls: [data, ...state.polls] };
+    case "poll.voted":
+      return { ...state, polls: state.polls.map((p) => (p.id === data.id ? mergePoll(p, data) : p)) };
+    case "poll.closed":
+      return { ...state, polls: state.polls.map((p) => (p.id === data.id ? { ...p, status: "CLOSED" } : p)) };
+    case "event.closed":
+      return { ...state, event: { ...state.event, status: "CLOSED" } };
+    default:
+      return state;
+  }
+}
+
+// 스냅샷을 받는 동안 도착한 SSE 이벤트를 붙잡아 두는 관문.
+// 서버가 스냅샷을 읽은 "뒤에" 커밋된 변화는 스냅샷에 없지만, 그 SSE는 스냅샷 응답보다 먼저 올 수 있다.
+// 그 이벤트를 옛 상태에 적용하면 곧 도착할 스냅샷이 덮어써 사라진다 → 보관했다가 스냅샷 위에 다시 적용한다.
+// 위 규칙들은 중복 추가 방지·max 병합이라 같은 이벤트를 두 번 적용해도 안전하다.
+export function createSnapshotGate() {
+  let pending = null;          // null = 실시간 모드, 배열 = 스냅샷 대기 중
+  let latest = 0;              // 재연결이 겹쳐 요청이 여러 개면 마지막 것만 유효
+
+  return {
+    begin() {
+      pending = [];
+      latest += 1;
+      return latest;
+    },
+    // 스냅샷 대기 중이면 보관하고 true — 호출자는 이번 이벤트를 직접 적용하지 않는다.
+    offer(name, data) {
+      if (pending === null) return false;
+      pending.push([name, data]);
+      return true;
+    },
+    // 옛 요청의 응답이면 null(버린다). 최신이면 보관 이벤트를 다시 적용한 상태를 돌려준다.
+    finish(token, snapshot) {
+      if (token !== latest) return null;
+      const replay = pending ?? [];
+      pending = null;
+      return replay.reduce(
+        (state, [name, data]) => applyLiveEvent(state, name, data),
+        { ...snapshot, questions: rank(snapshot.questions) },
+      );
+    },
+    fail(token) {
+      if (token === latest) pending = null;
+    },
+  };
+}
+```
+
+`LiveRoom` — 로컬 `rank`·`mergePoll`·switch문을 지우고 모듈을 쓴다. 핵심 변화는 `load`와 `applyEvent` 두 함수다(최종 전체 파일):
+
+`frontend/src/components/LiveRoom.jsx`
+
+```jsx
+import { useCallback, useEffect, useState } from "react";
+import {
+  closeLiveEvent, closePoll, createPoll, createQuestion, deleteQuestion,
+  getLiveSnapshot, toggleQuestionLike, votePoll,
+} from "../api.js";
+import { applyLiveEvent, createSnapshotGate, mergePoll, rank } from "../liveState.js";
+import { openLiveStream } from "../liveStream.js";
+
+const CONN_LABEL = {
+  connecting: "연결 중…",
+  live: "실시간 연결됨",
+  reconnecting: "재연결 중…",
+  closed: "연결 종료",
+};
+
+export default function LiveRoom({ code, onBack }) {
+  const [snap, setSnap] = useState(null);
+  const [conn, setConn] = useState("connecting");
+  const [msg, setMsg] = useState("");
+  const [question, setQuestion] = useState("");
+  const [pollForm, setPollForm] = useState({ title: "", options: ["", ""] });
+  // 스냅샷을 받는 동안 도착한 이벤트를 보관했다가 스냅샷 위에 다시 적용한다(liveState.js).
+  const [gate] = useState(createSnapshotGate);
+
+  const load = useCallback(async () => {
+    const token = gate.begin();
+    try {
+      const next = gate.finish(token, await getLiveSnapshot(code));
+      if (next) setSnap(next);      // null = 더 최근 요청이 있어 이 응답은 버린다
+    } catch (err) {
+      gate.fail(token);
+      setMsg(err.message);
+    }
+  }, [code, gate]);
+
+  const applyEvent = useCallback((name, data) => {
+    if (gate.offer(name, data)) return;
+    setSnap((prev) => (prev ? applyLiveEvent(prev, name, data) : prev));
+  }, [gate]);
+
+  // 순서가 핵심: 스트림을 먼저 열고 connected를 받은 "뒤에" 스냅샷을 읽는다.
+  // 스냅샷을 먼저 읽으면 [스냅샷 응답 ~ 구독 시작] 사이의 변화를 영영 놓친다.
+  useEffect(
+    () => openLiveStream(code, { onConnected: load, onEvent: applyEvent, onStatus: setConn }),
+    [code, load, applyEvent],
+  );
+
+  async function run(action) {
+    setMsg("");
+    try {
+      await action();
+    } catch (err) {
+      setMsg(err.message);
+    }
+  }
+
+  const submitQuestion = (e) => {
+    e.preventDefault();
+    run(async () => {
+      const created = await createQuestion(code, question);
+      setQuestion("");
+      // SSE(mine=false)가 먼저 왔을 수 있다 → 내 응답(mine=true)으로 교체
+      setSnap((prev) => ({
+        ...prev,
+        questions: rank([...prev.questions.filter((q) => q.id !== created.id), created]),
+      }));
+    });
+  };
+
+  const like = (id) => run(async () => {
+    const res = await toggleQuestionLike(id);
+    setSnap((prev) => ({
+      ...prev,
+      questions: rank(prev.questions.map((q) =>
+        (q.id === id ? { ...q, likedByMe: res.liked, likeCount: res.likeCount } : q))),
+    }));
+  });
+
+  const remove = (id) => run(async () => {
+    await deleteQuestion(id);
+    setSnap((prev) => ({ ...prev, questions: prev.questions.filter((q) => q.id !== id) }));
+  });
+
+  const vote = (pollId, optionId) => run(async () => {
+    const res = await votePoll(pollId, optionId);
+    setSnap((prev) => ({ ...prev, polls: prev.polls.map((p) => (p.id === pollId ? mergePoll(p, res) : p)) }));
+  });
+
+  const submitPoll = (e) => {
+    e.preventDefault();
+    run(async () => {
+      const options = pollForm.options.map((o) => o.trim()).filter(Boolean);
+      const created = await createPoll(code, pollForm.title, options);
+      setPollForm({ title: "", options: ["", ""] });
+      setSnap((prev) => (prev.polls.some((p) => p.id === created.id)
+        ? prev
+        : { ...prev, polls: [created, ...prev.polls] }));
+    });
+  };
+
+  const endPoll = (id) => run(async () => {
+    await closePoll(id);
+    setSnap((prev) => ({ ...prev, polls: prev.polls.map((p) => (p.id === id ? { ...p, status: "CLOSED" } : p)) }));
+  });
+
+  const endEvent = () => run(async () => {
+    await closeLiveEvent(code);
+    setSnap((prev) => ({ ...prev, event: { ...prev.event, status: "CLOSED" } }));
+  });
+
+  if (!snap) {
+    return (
+      <section>
+        <button type="button" className="btn tiny" onClick={onBack}>‹ 라이브 목록</button>
+        <div className={`status${msg ? " error" : ""}`}>{msg || "불러오는 중…"}</div>
+      </section>
+    );
+  }
+
+  const { event, questions, polls } = snap;
+  const open = event.status === "OPEN";
+  const isHost = event.host;
+
+  return (
+    <section className="live-room">
+      <div className="toolbar">
+        <button type="button" className="btn tiny" onClick={onBack}>‹ 라이브 목록</button>
+        <span className={`live-conn ${conn}`} role="status">{CONN_LABEL[conn]}</span>
+      </div>
+
+      <header className="live-head">
+        <p className="live-code" aria-label="참여 코드">{event.code}</p>
+        <h2 className="live-title">{event.title}</h2>
+        <p className="live-meta">진행 {event.hostUsername} · {open ? "진행 중" : "종료됨"}</p>
+        {isHost && open && (
+          <button type="button" className="btn tiny" onClick={endEvent}>이벤트 종료</button>
+        )}
+      </header>
+
+      {msg && <div className="status error">{msg}</div>}
+
+      <div className="live-grid">
+        <div>
+          <h3 className="section-title">투표</h3>
+          {isHost && open && (
+            <form className="inline-form" onSubmit={submitPoll}>
+              <strong>새 투표</strong>
+              <input placeholder="질문 (100자 이내)" maxLength={100} required value={pollForm.title}
+                onChange={(e) => setPollForm({ ...pollForm, title: e.target.value })} />
+              {pollForm.options.map((opt, i) => (
+                <input key={i} placeholder={`선택지 ${i + 1}`} maxLength={50} required value={opt}
+                  onChange={(e) => setPollForm({
+                    ...pollForm,
+                    options: pollForm.options.map((o, j) => (j === i ? e.target.value : o)),
+                  })} />
+              ))}
+              <div className="row">
+                {pollForm.options.length < 5 && (
+                  <button type="button" className="btn tiny"
+                    onClick={() => setPollForm({ ...pollForm, options: [...pollForm.options, ""] })}>
+                    선택지 추가
+                  </button>
+                )}
+                <button className="btn primary">투표 시작</button>
+              </div>
+            </form>
+          )}
+          {polls.length === 0 && <div className="status">아직 투표가 없습니다.</div>}
+          {polls.map((poll) => (
+            <PollCard key={poll.id} poll={poll}
+              canVote={open && poll.status === "OPEN" && poll.myOptionId == null}
+              canClose={isHost && open && poll.status === "OPEN"}
+              onVote={vote} onClose={endPoll} />
+          ))}
+        </div>
+
+        <div>
+          <h3 className="section-title">질문 <span className="num">{questions.length}</span></h3>
+          {open && (
+            <form className="inline-form" onSubmit={submitQuestion}>
+              <div className="row">
+                <input placeholder="질문을 입력하세요 (300자 이내)" maxLength={300} required
+                  value={question} onChange={(e) => setQuestion(e.target.value)} />
+                <button className="btn primary">등록</button>
+              </div>
+            </form>
+          )}
+          <ul className="question-list">
+            {questions.map((q) => (
+              <li key={q.id} className="question-item">
+                <button type="button" className={`like-btn${q.likedByMe ? " liked" : ""}`}
+                  aria-pressed={q.likedByMe} disabled={!open} onClick={() => like(q.id)}>
+                  ▲ <span className="num">{q.likeCount}</span>
+                </button>
+                <div className="question-body">
+                  <p className="question-content">{q.content}</p>
+                  <p className="question-meta">{q.authorUsername}</p>
+                </div>
+                {(q.mine || isHost) && (
+                  <button type="button" className="btn tiny" onClick={() => remove(q.id)}>삭제</button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function PollCard({ poll, canVote, canClose, onVote, onClose }) {
+  return (
+    <article className="poll-card">
+      <div className="poll-head">
+        <strong>{poll.title}</strong>
+        <span className="poll-status">
+          {poll.status === "OPEN" ? "진행 중" : "마감"} · <span className="num">{poll.totalVotes}</span>표
+        </span>
+      </div>
+      <ul className="poll-options">
+        {poll.options.map((o) => {
+          const pct = poll.totalVotes === 0 ? 0 : Math.round((o.count / poll.totalVotes) * 100);
+          return (
+            <li key={o.id}>
+              <button type="button" className={`poll-option${poll.myOptionId === o.id ? " mine" : ""}`}
+                disabled={!canVote} onClick={() => onVote(poll.id, o.id)}>
+                <span className="poll-bar" style={{ width: `${pct}%` }} aria-hidden="true" />
+                <span className="poll-text">{o.text}</span>
+                <span className="poll-count num">{o.count} · {pct}%</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {canClose && <button type="button" className="btn tiny" onClick={() => onClose(poll.id)}>투표 마감</button>}
+    </article>
+  );
+}
+```
+
+`useState(createSnapshotGate)` — 함수 자체를 넘기면 React가 **첫 렌더에 한 번만** 호출해 관문을 만든다(렌더마다 새 관문이 생기지 않는다).
+
+`LiveHub` — `maxLength` 대신 `sanitizeJoinCode`(최종 전체 파일):
+
+`frontend/src/components/LiveHub.jsx`
+
+```jsx
+import { useEffect, useState } from "react";
+import { createLiveEvent, getLiveSnapshot, getMyLiveEvents } from "../api.js";
+import { sanitizeJoinCode } from "../liveState.js";
+import LiveRoom from "./LiveRoom.jsx";
+
+// 단계 18: 라이브 입구 — 참여 코드로 들어가거나, 이벤트를 만들어 진행자가 된다.
+export default function LiveHub({ user }) {
+  const [code, setCode] = useState(null);
+  const [mine, setMine] = useState([]);
+  const [joinCode, setJoinCode] = useState("");
+  const [title, setTitle] = useState("");
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    if (!user || code) return;
+    getMyLiveEvents().then(setMine).catch((err) => setMsg(err.message));
+  }, [user, code]);
+
+  async function handleJoin(e) {
+    e.preventDefault();
+    setMsg("");
+    const normalized = sanitizeJoinCode(joinCode);
+    try {
+      await getLiveSnapshot(normalized);          // 없는 코드면 여기서 404 메시지
+      setJoinCode("");
+      setCode(normalized);
+    } catch (err) {
+      setMsg(err.message);
+    }
+  }
+
+  async function handleCreate(e) {
+    e.preventDefault();
+    setMsg("");
+    try {
+      const created = await createLiveEvent(title);
+      setTitle("");
+      setCode(created.code);
+    } catch (err) {
+      setMsg(err.message);
+    }
+  }
+
+  if (!user) {
+    return (
+      <section>
+        <div className="status">라이브는 로그인 후 이용할 수 있습니다. 우측 상단에서 로그인하세요.</div>
+      </section>
+    );
+  }
+  if (code) {
+    return <LiveRoom code={code} user={user} onBack={() => setCode(null)} />;
+  }
+
+  return (
+    <section>
+      {msg && <div className="status error">{msg}</div>}
+
+      <form className="inline-form" onSubmit={handleJoin}>
+        <strong>참여 코드로 입장</strong>
+        <div className="row">
+          {/* maxLength 대신 sanitizeJoinCode — 붙여넣은 " K7M2QX"가 공백 때문에 잘리지 않게 */}
+          <input className="live-code-input" placeholder="예: K7M2QX" required
+            autoCapitalize="characters" value={joinCode}
+            onChange={(e) => setJoinCode(sanitizeJoinCode(e.target.value))} />
+          <button className="btn primary">입장</button>
+        </div>
+      </form>
+
+      <form className="inline-form" onSubmit={handleCreate}>
+        <strong>새 라이브 이벤트 (진행자)</strong>
+        <div className="row">
+          <input placeholder="이벤트 제목 (100자 이내)" maxLength={100} required
+            value={title} onChange={(e) => setTitle(e.target.value)} />
+          <button className="btn">만들기</button>
+        </div>
+      </form>
+
+      <h2 className="section-title">내가 진행하는 이벤트</h2>
+      {mine.length === 0 && <div className="status">아직 만든 이벤트가 없습니다.</div>}
+      <ul className="board-list">
+        {mine.map((ev) => (
+          <li key={ev.id} className="board-card clickable" onClick={() => setCode(ev.code)}>
+            <span className="board-id live-code">{ev.code}</span>
+            <div className="board-body">
+              <p className="board-name">{ev.title}</p>
+              <p className="board-desc">{ev.status === "OPEN" ? "진행 중" : "종료됨"}</p>
+            </div>
+            <span className="chevron">›</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+```
+
+### 실제 Redis로 같은 계약 돌리기
+
+기존 계약 테스트의 저장소 생성을 `createStore()`로 열어 두고(변경 후 전체 파일), Redis 하위 클래스가 이를 덮어쓴다. JUnit은 **상속된 테스트 메서드도 하위 클래스에서 실행**하므로, 7개 계약이 그대로 Redis 구현에 돌고 TTL 검증 1개가 더해진다.
+
+`src/test/java/com/example/board/live/counter/LiveCounterStoreContractTest.java`
+
+```java
+package com.example.board.live.counter;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.Map;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+// 단계 18: 어떤 구현이든 지켜야 할 집계 규칙 — 여기선 InMemory, RedisLiveCounterStoreContractTest가 실제 Redis로 상속 실행.
+class LiveCounterStoreContractTest {
+
+  protected LiveCounterStore store;
+
+  @BeforeEach
+  void setUpStore() {
+    store = createStore();
+  }
+
+  // 하위 클래스가 다른 구현(Redis)을 끼워 같은 계약을 검증한다.
+  protected LiveCounterStore createStore() {
+    return new InMemoryLiveCounterStore();
+  }
+
+  @Test
+  void should_startAtZero_afterAddQuestion() {
+    store.addQuestion(1L, 10L);
+    assertThat(store.likeCounts(1L)).containsEntry(10L, 0L);
+  }
+
+  @Test
+  void should_toggleOnAndOff() {
+    store.addQuestion(1L, 10L);
+    assertThat(store.toggleLike(1L, 10L, 100L)).isEqualTo(new LikeResult(true, 1));
+    assertThat(store.toggleLike(1L, 10L, 100L)).isEqualTo(new LikeResult(false, 0));
+    assertThat(store.toggleLike(1L, 10L, 100L)).isEqualTo(new LikeResult(true, 1));
+  }
+
+  @Test
+  void should_countDistinctUsers() {
+    store.addQuestion(1L, 10L);
+    store.toggleLike(1L, 10L, 100L);
+    assertThat(store.toggleLike(1L, 10L, 200L).likeCount()).isEqualTo(2);
+  }
+
+  @Test
+  void should_isolateLikedIds_perUserAndEvent() {
+    store.addQuestion(1L, 10L);
+    store.addQuestion(2L, 20L);
+    store.toggleLike(1L, 10L, 100L);
+    store.toggleLike(2L, 20L, 100L);
+    assertThat(store.likedQuestionIds(1L, 100L)).containsExactly(10L);
+    assertThat(store.likedQuestionIds(1L, 200L)).isEmpty();
+  }
+
+  @Test
+  void should_dropFromCounts_afterRemoveQuestion() {
+    store.addQuestion(1L, 10L);
+    store.toggleLike(1L, 10L, 100L);
+    store.removeQuestion(1L, 10L);
+    assertThat(store.likeCounts(1L)).doesNotContainKey(10L);
+  }
+
+  @Test
+  void should_acceptFirstVoteOnly() {
+    assertThat(store.vote(5L, 51L, 100L)).isTrue();
+    assertThat(store.vote(5L, 52L, 100L)).isFalse();
+    assertThat(store.voteCounts(5L)).containsExactlyInAnyOrderEntriesOf(Map.of(51L, 1L));
+    assertThat(store.votedOptionId(5L, 100L)).isEqualTo(51L);
+    assertThat(store.votedOptionId(5L, 200L)).isNull();
+  }
+
+  @Test
+  void should_isolatePolls() {
+    store.vote(5L, 51L, 100L);
+    assertThat(store.vote(6L, 61L, 100L)).isTrue();
+    assertThat(store.voteCounts(6L)).containsEntry(61L, 1L);
+  }
+}
+```
+
+`src/test/java/com/example/board/live/counter/RedisLiveCounterStoreContractTest.java`
+
+```java
+package com.example.board.live.counter;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.util.Set;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
+
+// 단계 18: 같은 계약을 실제 Redis 구현(Lua 2개 포함)으로 실행한다 — 상위 클래스의 테스트가 그대로 상속된다.
+// Redis가 없으면(CI, Redis 미기동 로컬) 건너뛴다. 실행: REDIS_PORT=6390 ./gradlew test --tests '*RedisLiveCounterStore*'
+// 개발 데이터와 섞이지 않게 DB 15번을 쓰고, 테스트가 만든 live:* 키만 지운다.
+class RedisLiveCounterStoreContractTest extends LiveCounterStoreContractTest {
+
+  private static final String HOST = System.getenv().getOrDefault("REDIS_HOST", "localhost");
+  private static final int PORT = Integer.parseInt(System.getenv().getOrDefault("REDIS_PORT", "6379"));
+  private static final int TEST_DATABASE = 15;
+
+  private LettuceConnectionFactory factory;
+  private StringRedisTemplate redis;
+
+  @Override
+  protected LiveCounterStore createStore() {
+    // Lettuce의 연결 타임아웃(수 초)을 테스트마다 기다리지 않도록 TCP로 먼저 짧게 확인한다.
+    assumeTrue(reachable(), "Redis " + HOST + ":" + PORT + " 미기동 — Redis 계약 테스트 건너뜀");
+    RedisStandaloneConfiguration config = new RedisStandaloneConfiguration(HOST, PORT);
+    config.setDatabase(TEST_DATABASE);
+    factory = new LettuceConnectionFactory(config);
+    factory.afterPropertiesSet();
+    factory.start();
+    redis = new StringRedisTemplate(factory);
+    deleteTestKeys();
+    return new RedisLiveCounterStore(redis);
+  }
+
+  @AfterEach
+  void tearDown() {
+    if (factory != null) {
+      deleteTestKeys();
+      factory.destroy();
+    }
+  }
+
+  @Test
+  void should_setTtlOnEveryWrittenKey() {
+    store.addQuestion(1L, 10L);
+    store.toggleLike(1L, 10L, 100L);
+    store.vote(5L, 51L, 100L);
+
+    for (String key : Set.of("live:event:1:questions", "live:event:1:user:100:likes",
+        "live:poll:5:voters", "live:poll:5:counts")) {
+      assertThat(redis.getExpire(key)).as(key).isPositive();
+    }
+  }
+
+  private void deleteTestKeys() {
+    Set<String> keys = redis.keys("live:*");
+    if (keys != null && !keys.isEmpty()) {
+      redis.delete(keys);
+    }
+  }
+
+  private static boolean reachable() {
+    try (Socket socket = new Socket()) {
+      socket.connect(new InetSocketAddress(HOST, PORT), 300);
+      return true;
+    } catch (IOException e) {
+      return false;
+    }
+  }
+}
+```
+
+| 안전장치 | 이유 |
+|----------|------|
+| DB 15번 사용 | 개발용 DB 0번의 데이터와 섞이지 않게 |
+| `live:*` 키만 삭제(`FLUSHDB` 금지) | 같은 DB에 다른 무엇이 있어도 지우지 않는다 |
+| TCP 300ms 사전 확인 + `assumeTrue` | Redis가 없으면 **실패가 아니라 건너뜀**(CI·Redis 없는 로컬) |
+
+> 팁: 이 테스트가 "통과만 하는 테스트"가 아님을 확인하려면 투표 Lua에서 `EXPIRE KEYS[2]` 줄을 지우고 돌려 본다 — `live:poll:5:counts`의 TTL이 `-1`이라 실패한다(mutation 확인). 확인 후 원래대로 되돌린다.
+
+| 파일 / 클래스 | 출처 | 역할 |
+|---------------|------|------|
+| `liveState.js` | 이 Step에서 생성 | `sanitizeJoinCode`, `rank`, `mergePoll`, `applyLiveEvent`, `createSnapshotGate` |
+| `liveState.test.js` | 이 Step에서 생성(test) | 순수 함수 8케이스 |
+| `LiveRoom`, `LiveHub` | Step 10 — 수정 | 관문·코드 정리 사용 |
+| `RedisLiveCounterStoreContractTest` | 이 Step에서 생성(test) | 실제 Redis 계약 + TTL |
+| `LiveCounterStoreContractTest` | 1일차 Step 5 — 수정 | `createStore()` 확장점 |
+| `node:test`, `node:assert/strict` | Node.js 내장 | 프론트 테스트 |
+| `LettuceConnectionFactory`, `RedisStandaloneConfiguration` | Spring Data Redis | 테스트용 Redis 연결(DB 번호 지정) |
+| `Assumptions.assumeTrue` | JUnit 5 | 조건 불충족 시 건너뜀 |
+
+**확인**
+
+```bash
+cd frontend && npm test                    # 8 pass
+cd .. && docker run -d --rm --name live-redis -p 127.0.0.1:6390:6379 redis:7-alpine
+REDIS_PORT=6390 ./gradlew test --rerun --tests '*LiveCounterStoreContractTest'
+# 기대: InMemory 7 + Redis 8 PASS  (--rerun: 환경 변수만 바뀌면 Gradle이 테스트를 up-to-date로 건너뛴다)
+docker stop live-redis
+```
+
+---
+
+## Step 17. 최종 검증
 
 **왜 지금, 무슨 의미인가.** 빌드·전체 테스트·실제 기동까지 한 번에 확인한다(이 저장소의 표준 검증 스크립트).
 
 ```bash
 ./scripts/verify.sh
-# 기대: exit 0 — 빌드 + 전체 테스트(404개) + 기동 헬스체크
+# 기대: exit 0 — 빌드 + 전체 테스트 + 기동 헬스체크
+cd frontend && npm test && npm run build
 ```
 
 | 확인 | 결과 |
 |------|------|
-| 전체 테스트 | 404 PASS (2일차 종료 시점) |
+| 백엔드 테스트 | 412개 — 0 실패 (Redis 없으면 Redis 계약 8개 skip) |
+| 프론트 테스트 | 8 pass |
 | 프론트 빌드 | `npm run build` 성공 |
 | nginx 문법 | `nginx -t` 성공 |
 | 브라우저 E2E | Step 13 표 6단계 + Step 15 장애 복구 |
 | 모바일(390px) | 투표·질문이 한 열로 쌓이고 가로 스크롤 없음 |
 
+### 리뷰에서 지적됐지만 이번 범위에서 미룬 것
+
+| 지적 | 영향 | 미룬 이유 |
+|------|------|-----------|
+| 이벤트 종료와 구독이 동시에 일어나면 연결 하나가 30분 남음 | 화면은 "종료됨", 연결 표시만 남음 | 확률 낮음, 다음 timeout에 정리 |
+| 좋아요 연타 시 REST 응답 순서 역전 | 잠시 표시가 어긋남(서버는 정확) | 요청 중 버튼 비활성화로 해결 가능 |
+| `question.liked` 브로드캐스트 순서 역전 | 다음 변화까지 옛 숫자 | 좋아요는 줄 수 있어 max 병합 불가 — 버전 번호 필요 |
+| 키별 TTL 갱신 | 7일 넘게 열린 이벤트에서 중복 좋아요·재투표 가능 | 강의 이벤트는 몇 시간 — 종료 시점 TTL로 개선 가능 |
+| Redis 쓰기가 DB 커밋 전 | 커밋 실패 시 고아 점수(화면엔 안 보임) | `afterCommit`으로 옮기면 해결 |
+| 스냅샷이 투표마다 Redis 2회 | 투표 수 × 왕복 | 파이프라인으로 개선 가능 |
+| 전파가 요청 스레드에서 동기 | 느린 구독자가 쓰기 응답을 늦춤 | 규모가 커지면 `@Async` |
+
 ---
 
-## 부록. 2일차 변경 요약 (커밋 `2c57eee`, `2a30f7b`, `1ad06b3`, `4824a49`)
+## 부록. 2일차 변경 요약 (커밋 `2c57eee`, `2a30f7b`, `1ad06b3`, `4824a49`, `95957ac`)
 
 | 구분 | 파일 | Step |
 |------|------|------|
@@ -2695,10 +3475,10 @@ export function openLiveStream(code, { onConnected, onEvent, onStatus }) {
 | 신규 | `LivePollService`, `LivePollController` | 5, 6 |
 | 수정 | `LiveEventService`, `LiveSecurity` | 6 |
 | 수정 | `LiveSseRegistry`, `GlobalExceptionHandler` | 14, 15 |
-| 신규(test) | `LivePollServiceTest`, `ClientDisconnectHandlingTest` | 7, 14 |
+| 신규(test) | `LivePollServiceTest`, `ClientDisconnectHandlingTest`, `RedisLiveCounterStoreContractTest` | 7, 14, 16 |
 | 수정(test) | `InMemoryLiveCounterStore`, `LiveCounterStoreContractTest`, `LiveApiIntegrationTest`, `LiveEventCodeIssueTest`, `LiveSseRegistryTest` | 1, 7, 15 |
-| 신규(front) | `liveStream.js`, `LiveHub.jsx`, `LiveRoom.jsx` | 9, 10, 15 |
-| 수정(front) | `api.js`, `App.jsx`, `styles.css`, `nginx.conf` | 8, 11, 12 |
+| 신규(front) | `liveStream.js`, `LiveHub.jsx`, `LiveRoom.jsx`, `liveState.js`, `liveState.test.js` | 9, 10, 15, 16 |
+| 수정(front) | `api.js`, `App.jsx`, `styles.css`, `nginx.conf`, `package.json` | 8, 11, 12, 16 |
 
 ### 단계 18 전체 API
 
