@@ -15,6 +15,9 @@ public enum ErrorCode {
   COMMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "댓글을 찾을 수 없습니다."),
   // 단계 12: 알림 — 남의 알림 존재 유출을 막기 위해 소유 검증 실패도 이 코드(404)로 통일한다(열거 방어).
   NOTIFICATION_NOT_FOUND(HttpStatus.NOT_FOUND, "알림을 찾을 수 없습니다."),
+  // 단계 18: 실시간 질문·투표
+  LIVE_EVENT_NOT_FOUND(HttpStatus.NOT_FOUND, "라이브 이벤트를 찾을 수 없습니다."),
+  QUESTION_NOT_FOUND(HttpStatus.NOT_FOUND, "질문을 찾을 수 없습니다."),
   // 단계 7에서 발견: 매핑 없는 URL이 500으로 새던 것을 404로 교정 (NoResourceFoundException 핸들러)
   RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "요청한 경로를 찾을 수 없습니다."),
 
@@ -22,6 +25,8 @@ public enum ErrorCode {
   DUPLICATE_EMAIL(HttpStatus.CONFLICT, "이미 사용 중인 email입니다."),
   DUPLICATE_BOARD_NAME(HttpStatus.CONFLICT, "이미 존재하는 게시판 이름입니다."),
   NICKNAME_DUPLICATED(HttpStatus.CONFLICT, "이미 사용 중인 nickname입니다."),
+  // 단계 18: 종료된 이벤트는 질문·좋아요·투표를 더 받지 않는다.
+  LIVE_EVENT_CLOSED(HttpStatus.CONFLICT, "종료된 라이브 이벤트입니다."),
 
   // 단계 6에서 작성자 거부가 메서드 보안(@PreAuthorize)로 이동하며 ACCESS_DENIED로 통합됨. 미사용이나 보존.
   POST_ACCESS_DENIED(HttpStatus.FORBIDDEN, "게시글에 대한 권한이 없습니다."),
