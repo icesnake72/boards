@@ -3,6 +3,7 @@ import { getMe, silentLogin } from "./api.js";
 import AuthBar from "./components/AuthBar.jsx";
 import Boards from "./components/Boards.jsx";
 import ChatHub from "./components/ChatHub.jsx";
+import LiveHub from "./components/LiveHub.jsx";
 import Posts from "./components/Posts.jsx";
 import PostDetail from "./components/PostDetail.jsx";
 
@@ -43,11 +44,14 @@ export default function App() {
           </div>
           <nav className="main-nav" aria-label="주 메뉴">
             <button type="button"
-              className={`btn tiny${view.name !== "chat" ? " active" : ""}`}
+              className={`btn tiny${!["chat", "live"].includes(view.name) ? " active" : ""}`}
               onClick={() => setView({ name: "boards" })}>게시판</button>
             <button type="button"
               className={`btn tiny${view.name === "chat" ? " active" : ""}`}
               onClick={() => setView({ name: "chat" })}>채팅</button>
+            <button type="button"
+              className={`btn tiny${view.name === "live" ? " active" : ""}`}
+              onClick={() => setView({ name: "live" })}>라이브</button>
           </nav>
           {ready && (
             <AuthBar user={user} onAuthed={refreshUser} onLoggedOut={() => setUser(null)} />
@@ -69,6 +73,7 @@ export default function App() {
             onBack={() => setView({ name: "posts", board: view.board })} />
         )}
         {view.name === "chat" && ready && <ChatHub user={user} />}
+        {view.name === "live" && ready && <LiveHub user={user} />}
       </main>
 
       <footer className="site-footer">

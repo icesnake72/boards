@@ -239,3 +239,56 @@ export async function getChatMessages(roomId, before = null, size = 50) {
   if (before != null) params.set("before", before);
   return jsonFetch(`/api/v1/chat/rooms/${roomId}/messages?${params}`);
 }
+
+// ── 라이브(단계 18: 실시간 질문·투표) ──────────────────────────────────────
+// 쓰기·스냅샷은 Bearer가 필요하므로 jsonFetch, 실시간 수신은 liveStream.js(EventSource)가 담당.
+const liveCode = (code) => encodeURIComponent(code.trim().toUpperCase());
+
+export async function createLiveEvent(title) {
+  return jsonFetch("/api/v1/live/events", { method: "POST", body: JSON.stringify({ title }) });
+}
+
+export async function getMyLiveEvents() {
+  return jsonFetch("/api/v1/live/events/mine");
+}
+
+export async function getLiveSnapshot(code) {
+  return jsonFetch(`/api/v1/live/events/${liveCode(code)}`);
+}
+
+export async function closeLiveEvent(code) {
+  return jsonFetch(`/api/v1/live/events/${liveCode(code)}/close`, { method: "POST" });
+}
+
+export async function createQuestion(code, content) {
+  return jsonFetch(`/api/v1/live/events/${liveCode(code)}/questions`, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
+}
+
+export async function toggleQuestionLike(questionId) {
+  return jsonFetch(`/api/v1/live/questions/${questionId}/like`, { method: "POST" });
+}
+
+export async function deleteQuestion(questionId) {
+  return jsonFetch(`/api/v1/live/questions/${questionId}`, { method: "DELETE" });
+}
+
+export async function createPoll(code, title, options) {
+  return jsonFetch(`/api/v1/live/events/${liveCode(code)}/polls`, {
+    method: "POST",
+    body: JSON.stringify({ title, options }),
+  });
+}
+
+export async function votePoll(pollId, optionId) {
+  return jsonFetch(`/api/v1/live/polls/${pollId}/votes`, {
+    method: "POST",
+    body: JSON.stringify({ optionId }),
+  });
+}
+
+export async function closePoll(pollId) {
+  return jsonFetch(`/api/v1/live/polls/${pollId}/close`, { method: "POST" });
+}
