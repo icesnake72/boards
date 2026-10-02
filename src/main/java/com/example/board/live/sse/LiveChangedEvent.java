@@ -5,6 +5,7 @@ package com.example.board.live.sse;
 public record LiveChangedEvent(Long eventId, String name, Object payload) {
 
   public static final String CONNECTED = "connected";
+  public static final String PING = "ping";
   public static final String QUESTION_CREATED = "question.created";
   public static final String QUESTION_LIKED = "question.liked";
   public static final String QUESTION_DELETED = "question.deleted";

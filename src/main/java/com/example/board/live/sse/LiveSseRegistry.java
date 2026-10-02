@@ -84,12 +84,17 @@ public class LiveSseRegistry {
     }
   }
 
-  // ":ping" 주석 프레임 — 브라우저는 무시하지만, 끊긴 연결은 여기서 전송 실패로 드러나 정리되고
-  // 프록시(nginx 등)는 바이트가 흐르므로 유휴 연결로 보고 끊지 않는다.
+  // 25초마다 ping 이벤트 — 세 가지 역할:
+  // (1) 서버: 끊긴 연결이 전송 실패로 드러나 명부에서 정리된다.
+  // (2) 프록시(nginx 등): 바이트가 흐르므로 유휴 연결로 보고 끊지 않는다.
+  // (3) 브라우저: "연결은 열려 있는데 아무것도 안 오는"(half-open) 상태를 감지하는 기준이 된다.
+  //     주석 프레임(:ping)은 EventSource API에 보이지 않으므로 이름 있는 이벤트로 보낸다.
   @Scheduled(fixedRate = 25_000)
   public void heartbeat() {
     emitters.forEach((eventId, targets) -> targets.forEach(emitter ->
-        send(eventId, emitter, () -> SseEmitter.event().comment("ping"))));
+        send(eventId, emitter, () -> SseEmitter.event()
+            .name(LiveChangedEvent.PING)
+            .data(new LivePayloads.EventRef(eventId), MediaType.APPLICATION_JSON))));
   }
 
   public int subscriberCount(Long eventId) {

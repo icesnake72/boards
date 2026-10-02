@@ -11,6 +11,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
@@ -114,6 +115,13 @@ public class GlobalExceptionHandler {
     log.warn("No handler for path: {}", e.getResourcePath());
     return ResponseEntity.status(ErrorCode.RESOURCE_NOT_FOUND.getStatus())
         .body(ErrorResponse.of(ErrorCode.RESOURCE_NOT_FOUND));
+  }
+
+  // 단계 18: SSE 구독자가 탭을 닫거나 네트워크가 끊기면 Spring이 이 예외로 알린다.
+  // 정상 상황이므로 ERROR로 남기지 않고, 이미 닫힌 응답에 본문을 쓰지 않도록 void로 끝낸다.
+  @ExceptionHandler(AsyncRequestNotUsableException.class)
+  public void handleClientDisconnected(AsyncRequestNotUsableException e) {
+    log.debug("Client disconnected: {}", e.getMessage());
   }
 
   // 예상하지 못한 예외는 상세를 숨기고 로그만 남긴다 (보안상 내부 정보 노출 금지)

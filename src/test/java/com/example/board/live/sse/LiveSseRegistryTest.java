@@ -98,11 +98,12 @@ class LiveSseRegistryTest {
     assertThat(registry.subscriberCount(1L)).isZero();
   }
 
+  // 주석 프레임(:ping)은 EventSource API에 보이지 않는다 → 클라이언트가 침묵을 감지할 수 있게 이름 있는 이벤트로 보낸다.
   @Test
-  void should_sendCommentFrame_onHeartbeat() {
+  void should_sendNamedPingEvent_onHeartbeat() {
     registry.subscribe(1L);
     registry.heartbeat();
 
-    assertThat(created.get(0).frames.get(1)).startsWith(":ping");
+    assertThat(created.get(0).frames.get(1)).contains("event:ping");
   }
 }

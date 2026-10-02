@@ -79,7 +79,7 @@ status: approved-design
 
 - emitter 타임아웃 30분. `onCompletion`/`onTimeout`/`onError`에서 제거.
 - 구독 직후 `connected` 이벤트 1회 전송 → 헤더가 즉시 flush되고 클라이언트가 연결 성공을 안다.
-- `@Scheduled(fixedRate = 25s)` heartbeat: `SseEmitter.event().comment("ping")`. 전송 실패 emitter는 제거.
+- `@Scheduled(fixedRate = 25s)` heartbeat: 이름 있는 `ping` 이벤트(`{eventId}`). 전송 실패 emitter는 제거. (구현 중 변경: 주석 프레임 `:ping`은 EventSource API에 보이지 않아 클라이언트가 half-open 연결을 감지할 수 없었다)
 - `send` 실패(`IOException`, `IllegalStateException`)는 debug 로그 후 제거 — 끊긴 클라이언트는 정상 상황.
 - 컨트롤러는 응답에 `X-Accel-Buffering: no`, `Cache-Control: no-cache`를 붙인다.
 - 존재하지 않는 code는 404, CLOSED 이벤트 구독은 `event.closed` 1회 보내고 즉시 complete.
@@ -89,6 +89,7 @@ status: approved-design
 | name | data |
 |---|---|
 | `connected` | `{eventId}` |
+| `ping` | `{eventId}` — 25초 heartbeat |
 | `question.created` | `QuestionResponse` (likedByMe=false, mine=false) |
 | `question.liked` | `{id, likeCount}` |
 | `question.deleted` | `{id}` |
@@ -146,12 +147,13 @@ Long votedOptionId(Long pollId, Long userId);                         // 없으�
 - `frontend/nginx.conf`: `location /api/v1/live/` 블록 — `proxy_buffering off; proxy_cache off; proxy_read_timeout 1h;` + 기존 헤더 4종.
 - Vite dev proxy는 기존 `/api` 규칙으로 SSE도 통과(확인 항목).
 - 로깅: 구독/해제 debug, 이벤트 생성·종료 info, 전송 실패 debug.
+- `GlobalExceptionHandler`: `AsyncRequestNotUsableException`(SSE 클라이언트 연결 끊김)은 debug 로그 + void 처리. 최후 방어선(`Exception`)이 받으면 ERROR 로그와 닫힌 응답 쓰기 실패가 반복된다(E2E에서 발견).
 
 ## 9. 프론트 (`board/frontend`)
 
 | 파일 | 내용 |
 |---|---|
-| `src/liveStream.js` | `openLiveStream(code, handlers)` — `EventSource` 래핑, 이벤트명별 `addEventListener`, `open` 재발생 시 `onReconnect`(스냅샷 재요청), `close()` 반환 |
+| `src/liveStream.js` | `openLiveStream(code, {onConnected, onEvent, onStatus})` — `EventSource` 래핑, `connected`마다 스냅샷 재요청, **60초 침묵 watchdog**(ping 포함 아무 이벤트도 없으면 직접 닫고 재연결 — half-open 연결 대비), `event.closed` 수신 시 종료, 정리 함수 반환 |
 | `src/components/LiveHub.jsx` | 코드 입력 → 입장, 이벤트 생성, 내가 진행하는 이벤트 목록 |
 | `src/components/LiveRoom.jsx` | 질문 입력·목록(좋아요 순), 좋아요 버튼, 투표 카드(결과 막대·내 선택 표시), 진행자 컨트롤(투표 생성·마감, 이벤트 종료) |
 | `App.jsx`, `styles.css` | "Live" 탭, All Day A.I 토큰 사용 |
