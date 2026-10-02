@@ -99,6 +99,10 @@ public class SecurityConfig {
             // /me는 인증 필요 — 타인 프로필(/profiles/{userId})보다 먼저 매칭해야 한다
             .requestMatchers("/api/v1/profiles/me").authenticated()
             .requestMatchers(HttpMethod.GET, "/api/v1/profiles/*").permitAll()
+            // 단계 18: SSE 구독만 공개 — 브라우저 EventSource는 Authorization 헤더를 붙일 수 없다.
+            // 스트림에는 공개 가능한 정보(질문 본문·작성자 username·집계 숫자)만 싣고,
+            // 쓰기(질문·좋아요·투표)와 개인 상태가 담긴 스냅샷은 아래 anyRequest().authenticated()가 지킨다.
+            .requestMatchers(HttpMethod.GET, "/api/v1/live/events/*/stream").permitAll()
             // 단계 6: board 생성/수정/삭제의 ADMIN 인가는 BoardController의 @PreAuthorize("hasRole('ADMIN')")로 이동.
             // 공개 GET 규칙과 anyRequest().authenticated()는 유지 → 비로그인은 401, 로그인 USER는 @PreAuthorize가 403.
             .anyRequest().authenticated())
