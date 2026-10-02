@@ -35,9 +35,9 @@ status: approved-design
 
 | 엔티티 | 필드 | 제약 |
 |---|---|---|
-| `LiveEvent` | `id`, `host`(User, LAZY), `title`, `code`, `status`(`LiveEventStatus`: OPEN/CLOSED) | `code` unique, 6자 |
+| `LiveEvent` | `id`, `host`(User, LAZY), `title`, `code`, `status`(`LiveStatus`: OPEN/CLOSED) | `code` unique, 6자 |
 | `Question` | `id`, `event`(LiveEvent, LAZY), `author`(User, LAZY), `content` | content 1~300자 |
-| `Poll` | `id`, `event`(LiveEvent, LAZY), `title`, `status`(`PollStatus`: OPEN/CLOSED), `options`(OneToMany, cascade ALL, orderBy sortOrder) | 생성 즉시 OPEN |
+| `Poll` | `id`, `event`(LiveEvent, LAZY), `title`, `status`(`LiveStatus` 공용), `options`(OneToMany, cascade ALL, orderBy sortOrder) | 생성 즉시 OPEN |
 | `PollOption` | `id`, `poll`(Poll, LAZY), `text`, `sortOrder` | 2~5개, 각 1~50자 |
 
 - 참여 코드: 혼동 문자(`0 O 1 I`)를 뺀 `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`에서 `SecureRandom`으로 6자. `existsByCode`가 참이면 최대 5회 재시도, 실패 시 `INTERNAL_ERROR`.
@@ -48,7 +48,7 @@ status: approved-design
 
 | 메서드 | 경로 | 권한 | 요청 → 응답 |
 |---|---|---|---|
-| POST | `/events` | 로그인 | `{title}` → 201 `LiveEventResponse{id, code, title, status, hostNickname, host:true}` |
+| POST | `/events` | 로그인 | `{title}` → 201 `LiveEventResponse{id, code, title, status, hostUsername, host, createdAt}` |
 | GET | `/events/mine` | 로그인 | → `List<LiveEventResponse>` (최신순) |
 | GET | `/events/{code}` | 로그인 | → `LiveSnapshotResponse{event, questions[], polls[]}` |
 | POST | `/events/{code}/close` | 진행자 | → 204 |
@@ -61,9 +61,9 @@ status: approved-design
 | POST | `/polls/{id}/close` | 진행자 | → 204 |
 
 스냅샷 DTO:
-- `QuestionResponse{id, content, authorNickname, likeCount, likedByMe, mine, createdAt}`
+- `QuestionResponse{id, content, authorUsername, likeCount, likedByMe, mine, createdAt}` — 닉네임 컬럼이 User에 없어 댓글(`authorUsername`)과 같이 username 사용
 - `PollResponse{id, title, status, options[{id, text, count}], totalVotes, myOptionId}`
-- 질문 정렬: ZSET 점수 내림차순, 동점은 최신 질문 우선(`createdAt` desc) — Java에서 정렬.
+- 질문 정렬: 좋아요 내림차순, 동점은 최신 질문 우선(`id` desc — IDENTITY라 생성 순서와 같다) — Java에서 정렬(동점 규칙을 결정적으로 두기 위해).
 
 **스냅샷 + 스트림 분리**: 입장·재연결 시 REST 스냅샷으로 현재 상태 전체를 받고, 이후 변화만 SSE로 받는다. `Last-Event-ID` 재전송은 구현하지 않는다(재연결 = 스냅샷 재요청).
 
@@ -89,11 +89,11 @@ status: approved-design
 | name | data |
 |---|---|
 | `connected` | `{eventId}` |
-| `question.created` | `{id, content, authorNickname, likeCount:0, createdAt}` |
+| `question.created` | `QuestionResponse` (likedByMe=false, mine=false) |
 | `question.liked` | `{id, likeCount}` |
 | `question.deleted` | `{id}` |
-| `poll.created` | `{id, title, status, options[{id, text, count}], totalVotes}` |
-| `poll.voted` | `{id, options[{id, count}], totalVotes}` |
+| `poll.created` | `PollResponse` (myOptionId=null) |
+| `poll.voted` | `PollResponse` (myOptionId=null) — 득표수는 단조 증가라 클라이언트는 옵션별 max로 병합(순서 역전 대비) |
 | `poll.closed` | `{id}` |
 | `event.closed` | `{eventId}` |
 
@@ -102,7 +102,7 @@ status: approved-design
 | 키 | 타입 | 내용 |
 |---|---|---|
 | `live:event:{eventId}:questions` | ZSET | member=questionId, score=좋아요 수 |
-| `live:question:{questionId}:likers` | SET | 좋아요 누른 userId |
+| `live:event:{eventId}:user:{userId}:likes` | SET | 이 사용자가 좋아요 누른 questionId — 토글 중복 방지 + 스냅샷의 likedByMe를 `SMEMBERS` 1회로 |
 | `live:poll:{pollId}:counts` | HASH | optionId → 득표수 |
 | `live:poll:{pollId}:voters` | HASH | userId → optionId |
 
@@ -113,14 +113,14 @@ void addQuestion(Long eventId, Long questionId);
 void removeQuestion(Long eventId, Long questionId);
 LikeResult toggleLike(Long eventId, Long questionId, Long userId);   // record LikeResult(boolean liked, long likeCount)
 Map<Long, Long> likeCounts(Long eventId);                             // questionId → count
-Set<Long> likedQuestionIds(Long userId, Collection<Long> questionIds);
+Set<Long> likedQuestionIds(Long eventId, Long userId);
 boolean vote(Long pollId, Long optionId, Long userId);                // false = 이미 투표
 Map<Long, Long> voteCounts(Long pollId);                              // optionId → count
 Long votedOptionId(Long pollId, Long userId);                         // 없으면 null
 ```
 
 - `RedisLiveCounterStore`: `StringRedisTemplate` + `DefaultRedisScript<Long>` 2개.
-  - like toggle Lua: `SADD likers uid` → 1이면 `ZINCRBY +1`, 0이면 `SREM` + `ZINCRBY -1`. 결과 `{liked, score}`를 한 번의 왕복으로 반환. 모든 키 `EXPIRE 604800`.
+  - like toggle Lua: `SADD userLikes questionId` → 1이면 `ZINCRBY +1`, 0이면 `SREM` + `ZINCRBY -1`. 결과 `{liked, score}`를 한 번의 왕복으로 반환. 모든 키 `EXPIRE 604800`.
   - vote Lua: `HSETNX voters uid optionId` → 1이면 `HINCRBY counts optionId 1` 후 1 반환, 아니면 0. 모든 키 `EXPIRE 604800`.
 - `InMemoryLiveCounterStore`(test): `synchronized` 메서드 — 테스트 컨텍스트에서 `@Primary`로 대체.
 - `LiveCounterStoreContractTest`: InMemory 구현에 같은 시나리오 적용(기존 `RefreshTokenStoreContractTest`와 동일 구조).
