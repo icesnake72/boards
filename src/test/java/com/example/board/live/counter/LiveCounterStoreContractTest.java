@@ -2,6 +2,7 @@ package com.example.board.live.counter;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 // 단계 18: 어떤 구현이든 지켜야 할 집계 규칙(Redis 구현은 로컬 E2E로 같은 계약을 실증).
@@ -46,5 +47,21 @@ class LiveCounterStoreContractTest {
     store.toggleLike(1L, 10L, 100L);
     store.removeQuestion(1L, 10L);
     assertThat(store.likeCounts(1L)).doesNotContainKey(10L);
+  }
+
+  @Test
+  void should_acceptFirstVoteOnly() {
+    assertThat(store.vote(5L, 51L, 100L)).isTrue();
+    assertThat(store.vote(5L, 52L, 100L)).isFalse();
+    assertThat(store.voteCounts(5L)).containsExactlyInAnyOrderEntriesOf(Map.of(51L, 1L));
+    assertThat(store.votedOptionId(5L, 100L)).isEqualTo(51L);
+    assertThat(store.votedOptionId(5L, 200L)).isNull();
+  }
+
+  @Test
+  void should_isolatePolls() {
+    store.vote(5L, 51L, 100L);
+    assertThat(store.vote(6L, 61L, 100L)).isTrue();
+    assertThat(store.voteCounts(6L)).containsEntry(61L, 1L);
   }
 }

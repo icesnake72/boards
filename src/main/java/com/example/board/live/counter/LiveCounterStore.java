@@ -16,4 +16,12 @@ public interface LiveCounterStore {
   Map<Long, Long> likeCounts(Long eventId);
 
   Set<Long> likedQuestionIds(Long eventId, Long userId);
+
+  // 사용자당 1표. 이미 투표했으면 false(집계 변화 없음).
+  boolean vote(Long pollId, Long optionId, Long userId);
+
+  Map<Long, Long> voteCounts(Long pollId);
+
+  // 투표 안 했으면 null.
+  Long votedOptionId(Long pollId, Long userId);
 }

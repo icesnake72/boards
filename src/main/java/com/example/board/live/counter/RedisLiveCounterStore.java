@@ -16,6 +16,8 @@ import org.springframework.stereotype.Component;
 // 단계 18: 좋아요 집계의 Redis 구현.
 //   live:event:{eventId}:questions            ZSET  member=questionId, score=좋아요 수
 //   live:event:{eventId}:user:{userId}:likes  SET   이 사용자가 좋아요 누른 questionId
+//   live:poll:{pollId}:voters                 HASH  userId → 고른 optionId
+//   live:poll:{pollId}:counts                 HASH  optionId → 득표수
 @Component
 @RequiredArgsConstructor
 public class RedisLiveCounterStore implements LiveCounterStore {
@@ -45,6 +47,20 @@ public class RedisLiveCounterStore implements LiveCounterStore {
   @SuppressWarnings("rawtypes")
   private static final RedisScript<List> TOGGLE_LIKE =
       new DefaultRedisScript<>(TOGGLE_LIKE_LUA, List.class);
+
+  // HSETNX는 "필드가 없을 때만 저장" — 1이면 첫 투표, 0이면 이미 투표. 성공했을 때만 HINCRBY.
+  // KEYS[1]=투표자 HASH, KEYS[2]=득표 HASH / ARGV[1]=userId, ARGV[2]=optionId, ARGV[3]=TTL(초)
+  private static final String VOTE_LUA = """
+      if redis.call('HSETNX', KEYS[1], ARGV[1], ARGV[2]) == 0 then
+        return 0
+      end
+      redis.call('HINCRBY', KEYS[2], ARGV[2], 1)
+      redis.call('EXPIRE', KEYS[1], ARGV[3])
+      redis.call('EXPIRE', KEYS[2], ARGV[3])
+      return 1
+      """;
+
+  private static final RedisScript<Long> VOTE = new DefaultRedisScript<>(VOTE_LUA, Long.class);
 
   private final StringRedisTemplate redis;
 
@@ -93,6 +109,28 @@ public class RedisLiveCounterStore implements LiveCounterStore {
     return members.stream().map(Long::valueOf).collect(Collectors.toUnmodifiableSet());
   }
 
+  @Override
+  public boolean vote(Long pollId, Long optionId, Long userId) {
+    Long result = redis.execute(VOTE, List.of(votersKey(pollId), countsKey(pollId)),
+        userId.toString(), optionId.toString(), String.valueOf(TTL_SECONDS));
+    return Long.valueOf(1L).equals(result);
+  }
+
+  @Override
+  public Map<Long, Long> voteCounts(Long pollId) {
+    Map<Object, Object> entries = redis.opsForHash().entries(countsKey(pollId));
+    Map<Long, Long> result = new HashMap<>();
+    entries.forEach((option, count) ->
+        result.put(Long.valueOf(option.toString()), Long.valueOf(count.toString())));
+    return result;
+  }
+
+  @Override
+  public Long votedOptionId(Long pollId, Long userId) {
+    Object optionId = redis.opsForHash().get(votersKey(pollId), userId.toString());
+    return optionId == null ? null : Long.valueOf(optionId.toString());
+  }
+
   private static long toLong(Object value) {
     return value instanceof Number number ? number.longValue() : Long.parseLong(value.toString());
   }
@@ -103,5 +141,13 @@ public class RedisLiveCounterStore implements LiveCounterStore {
 
   private static String userLikesKey(Long eventId, Long userId) {
     return "live:event:" + eventId + ":user:" + userId + ":likes";
+  }
+
+  private static String votersKey(Long pollId) {
+    return "live:poll:" + pollId + ":voters";
+  }
+
+  private static String countsKey(Long pollId) {
+    return "live:poll:" + pollId + ":counts";
   }
 }

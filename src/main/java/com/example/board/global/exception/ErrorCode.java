@@ -18,6 +18,8 @@ public enum ErrorCode {
   // 단계 18: 실시간 질문·투표
   LIVE_EVENT_NOT_FOUND(HttpStatus.NOT_FOUND, "라이브 이벤트를 찾을 수 없습니다."),
   QUESTION_NOT_FOUND(HttpStatus.NOT_FOUND, "질문을 찾을 수 없습니다."),
+  POLL_NOT_FOUND(HttpStatus.NOT_FOUND, "투표를 찾을 수 없습니다."),
+  POLL_OPTION_NOT_FOUND(HttpStatus.NOT_FOUND, "투표 선택지를 찾을 수 없습니다."),
   // 단계 7에서 발견: 매핑 없는 URL이 500으로 새던 것을 404로 교정 (NoResourceFoundException 핸들러)
   RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "요청한 경로를 찾을 수 없습니다."),
 
@@ -27,6 +29,8 @@ public enum ErrorCode {
   NICKNAME_DUPLICATED(HttpStatus.CONFLICT, "이미 사용 중인 nickname입니다."),
   // 단계 18: 종료된 이벤트는 질문·좋아요·투표를 더 받지 않는다.
   LIVE_EVENT_CLOSED(HttpStatus.CONFLICT, "종료된 라이브 이벤트입니다."),
+  POLL_CLOSED(HttpStatus.CONFLICT, "마감된 투표입니다."),
+  ALREADY_VOTED(HttpStatus.CONFLICT, "이미 투표했습니다."),
 
   // 단계 6에서 작성자 거부가 메서드 보안(@PreAuthorize)로 이동하며 ACCESS_DENIED로 통합됨. 미사용이나 보존.
   POST_ACCESS_DENIED(HttpStatus.FORBIDDEN, "게시글에 대한 권한이 없습니다."),

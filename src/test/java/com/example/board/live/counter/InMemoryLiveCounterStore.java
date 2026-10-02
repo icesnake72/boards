@@ -10,6 +10,8 @@ public class InMemoryLiveCounterStore implements LiveCounterStore {
 
   private final Map<Long, Map<Long, Long>> scores = new HashMap<>();
   private final Map<String, Set<Long>> userLikes = new HashMap<>();
+  private final Map<Long, Map<Long, Long>> voters = new HashMap<>();
+  private final Map<Long, Map<Long, Long>> counts = new HashMap<>();
 
   @Override
   public synchronized void addQuestion(Long eventId, Long questionId) {
@@ -46,8 +48,29 @@ public class InMemoryLiveCounterStore implements LiveCounterStore {
     return Set.copyOf(userLikes.getOrDefault(eventId + ":" + userId, Set.of()));
   }
 
+  @Override
+  public synchronized boolean vote(Long pollId, Long optionId, Long userId) {
+    if (voters.computeIfAbsent(pollId, id -> new HashMap<>()).putIfAbsent(userId, optionId) != null) {
+      return false;
+    }
+    counts.computeIfAbsent(pollId, id -> new HashMap<>()).merge(optionId, 1L, Long::sum);
+    return true;
+  }
+
+  @Override
+  public synchronized Map<Long, Long> voteCounts(Long pollId) {
+    return Map.copyOf(counts.getOrDefault(pollId, Map.of()));
+  }
+
+  @Override
+  public synchronized Long votedOptionId(Long pollId, Long userId) {
+    return voters.getOrDefault(pollId, Map.of()).get(userId);
+  }
+
   public synchronized void clear() {
     scores.clear();
     userLikes.clear();
+    voters.clear();
+    counts.clear();
   }
 }
