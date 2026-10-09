@@ -166,6 +166,7 @@ flowchart TD
     S14 --> S15["Step 15 — 수정 2: ping 이벤트 + watchdog"]
     S15 --> S16["Step 16 — 코드 리뷰가 찾은 세 문제"]
     S16 --> S17["Step 17 — 최종 검증"]
+    S17 --> S18["Step 18 — 배포: 하나씩 고치고 확인"]
   end
   S7 --> S8
   S12 --> S13
@@ -185,6 +186,7 @@ flowchart TD
 | 14~15 | `ClientDisconnectHandlingTest` | `GlobalExceptionHandler`, `LiveSseRegistry`, `LiveChangedEvent`, `liveStream.js` | 발견한 문제를 RED → GREEN으로 |
 | 16 | `liveState.js`(+테스트), `RedisLiveCounterStoreContractTest` | `LiveRoom`, `LiveHub`, `package.json`, 계약 테스트 | 작성자가 못 본 것을 리뷰가 찾는다 |
 | 17 | — | — | 전체 회귀 + 기동 검증 |
+| 18 | — | (`nginx.conf` 점검) | 운영 프록시 경로를 리허설한 뒤 배포 |
 
 ---
 
@@ -3578,6 +3580,155 @@ cd frontend && npm test && npm run build
 | Redis 쓰기가 DB 커밋 전 | 커밋 실패 시 고아 점수(화면엔 안 보임) | `afterCommit`으로 옮기면 해결 |
 | 스냅샷이 투표마다 Redis 2회 | 투표 수 × 왕복 | 파이프라인으로 개선 가능 |
 | 전파가 요청 스레드에서 동기 | 느린 구독자가 쓰기 응답을 늦춤 | 규모가 커지면 `@Async` |
+
+---
+
+## Step 18. 배포 — 설정을 하나씩 고치고 확인하기
+
+**왜 지금, 무슨 의미인가.** 코드는 끝났지만, 운영에서는 브라우저와 앱 사이에 **caddy → nginx** 두 단계의 프록시가 더 있다.
+로컬 Vite에서 잘 되던 SSE가 운영에서 "뭉쳐서 늦게 오는" 이유는 거의 언제나 이 구간이다. 이 Step은 배포 전에 손볼 파일을
+**한 번에 하나씩** 고치고 그 자리에서 확인한 뒤, 로컬 도커로 운영과 같은 경로를 리허설하고, 배포·운영 확인까지 끝낸다.
+채팅(STOMP) 배포 때 바뀐 것까지 포함한 전체 기록은 [[REALTIME-DEPLOY]]에 있다.
+
+### 18-1. 무엇을 바꾸고, 무엇을 안 바꾸나
+
+| 파일 | 라이브(SSE) 배포에서 | 이유 |
+|------|---------------------|------|
+| `frontend/nginx.conf` | **수정** — 스트림 전용 location 1개 | 버퍼링·60초 timeout이 SSE를 망가뜨린다 |
+| `docker-compose.yml` | 그대로 | 새 컨테이너·JVM이 없다(board-app 안의 기능) |
+| `scripts/deploy.sh`, `.github/workflows/deploy.yml`, Secrets | 그대로 | 새 준비물·비밀값이 없다 |
+| `caddy/Caddyfile` | 그대로 | caddy는 `text/event-stream`을 자동으로 즉시 흘려보낸다 |
+| `frontend/vite.config.js` | 그대로 | 기존 `/api` 프록시가 스트림까지 통과 |
+
+> [!IMPORTANT]
+> 새 JVM이 없으므로 2GB 서버의 메모리 사고 조건([[REALTIME-DEPLOY]] §5)에는 해당하지 않는다. chat 배포 때와 달리 compose·배포 스크립트를 건드릴 일이 없다는 것이 "기존 앱 안에 만든" 설계의 배포상 이점이다.
+
+### 18-2. 수정 ① `frontend/nginx.conf` — 스트림만 버퍼링 끄기
+
+Step 12에서 이미 추가했다면 확인만 한다. 아직이라면 `# ── 채팅 프록시 ──` 블록 바로 위(채팅 블록이 없으면 `location /api/` 블록 바로 아래)에 추가한다.
+정규식 location(`~`)은 파일 안 위치와 상관없이 일치하면 접두어 location(`/api/`)보다 우선하므로 순서는 동작에 영향이 없다 — 읽는 사람을 위해 API 블록들 곁에 둔다.
+
+```nginx
+location ~ ^/api/v1/live/events/[^/]+/stream$ {
+  proxy_pass http://$backend;
+  proxy_http_version 1.1;
+  proxy_set_header Connection "";
+  proxy_set_header Host $host;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $fwd_proto;
+  proxy_buffering off;
+  proxy_cache off;
+  proxy_read_timeout 3600s;
+}
+```
+
+**확인 — 문법과 반영 여부**
+
+```bash
+grep -n "live/events" frontend/nginx.conf          # 블록이 들어갔는가
+docker run --rm -v "$PWD/frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro" nginx:alpine nginx -t
+# 기대: syntax is ok / test is successful
+```
+
+> 주의: `$backend`, `$fwd_proto`는 이 파일 위쪽에 이미 정의된 변수다(`set $backend board-app:8090;`, `map ... $fwd_proto`). 블록만 다른 nginx 설정에 복사하면 "unknown variable"로 실패한다.
+
+### 18-3. 점검 ② 코드 쪽 짝 — 이미 들어 있어야 하는 두 줄
+
+설정 파일은 아니지만, 배포 경로가 동작하려면 코드에 아래 두 가지가 있어야 한다(1일차 Step 13). 고칠 것은 없고 **있는지만** 확인한다.
+
+```bash
+grep -n "live/events/\*/stream" src/main/java/com/example/board/global/config/SecurityConfig.java
+# 기대: .requestMatchers(HttpMethod.GET, "/api/v1/live/events/*/stream").permitAll()
+grep -n "X-Accel-Buffering" src/main/java/com/example/board/live/LiveEventController.java
+# 기대: response.setHeader("X-Accel-Buffering", "no");
+```
+
+| 없으면 | 증상 |
+|--------|------|
+| permitAll | 브라우저 구독이 401 → `EventSource`가 포기(CLOSED), 화면 "재연결 중…" 반복 |
+| `X-Accel-Buffering` | nginx 설정이 빠진 환경에서 이벤트가 뭉쳐 도착(이중 안전장치가 없어짐) |
+
+### 18-4. 점검 ③ 채팅(STOMP) 설정이 이미 들어 있는 저장소인가
+
+이 저장소는 채팅 배포(9월)를 먼저 거쳤다. 그 변경이 빠져 있으면 라이브와 무관하게 `docker compose`가 실패할 수 있으니 확인한다. 없다면 [[REALTIME-DEPLOY]] §2를 순서대로 적용한다.
+
+```bash
+grep -n "include:" -A3 docker-compose.yml           # ../chat/docker-compose.yml include
+grep -n "chat 스택 준비" scripts/deploy.sh            # ~/chat clone·.env 생성
+grep -n "JWT_SECRET" .github/workflows/deploy.yml   # env + envs 두 곳
+gh secret list | grep JWT_SECRET                    # Repository Secret 존재
+docker compose config > /dev/null && echo "compose OK"   # include 대상(../chat)까지 해석되는가
+```
+
+### 18-5. 리허설 — 로컬 도커로 운영과 같은 경로 확인
+
+Vite 개발 서버가 아니라 **caddy → nginx → board-app**을 그대로 거치는 로컬 도커 스택에서 확인한다. 바뀐 이미지 두 개만 다시 만들고, caddy·Redis·MySQL·chat-app은 그대로 둔다.
+
+```bash
+docker compose build app frontend
+docker compose up -d --no-deps app frontend
+docker ps --format '{{.Names}} {{.Status}}' | grep -E "board-app|board-frontend"   # healthy 확인
+```
+
+도착 시각을 찍어 버퍼링이 없는지 본다(터미널 두 개):
+
+```bash
+# 터미널 A — 줄마다 도착 시각(ms)
+curl -sN http://localhost/api/v1/live/events/<코드>/stream \
+  | while IFS= read -r line; do printf '%s %s\n' "$(python3 -c 'import time;print(int(time.time()*1000))')" "$line"; done
+
+# 터미널 B — 질문 등록 직전 시각을 찍고 보낸다
+python3 -c 'import time;print(int(time.time()*1000))'
+curl -s -X POST http://localhost/api/v1/live/events/<코드>/questions \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"content":"리허설"}'
+```
+
+| 확인 | 기대(실측) |
+|------|-----------|
+| 보낸 시각 → 터미널 A의 `event:question.created` 시각 | 1초 이내(실측 0.13~0.34초) |
+| 응답 헤더에 `X-Accel-Buffering` | **안 보이는 게 정상** — nginx가 지시로 읽고 지운다 |
+| `docker restart board-app` 후 브라우저 | 즉시 "재연결 중…" → 60초 안에 "실시간 연결됨"(실측 약 52초) |
+| 재시작 후 `docker logs --since 3m board-app \| grep -c " ERROR "` | 0 |
+
+### 18-6. 배포
+
+```bash
+git push origin main
+gh run list --branch main --limit 1          # 실행 ID 확인
+gh run watch <실행 ID> --exit-status          # test → build(GHCR) → deploy(SSH) 모두 ✓
+```
+
+> 팁: 문서만 바뀐 커밋은 재배포되지 않는다(`deploy.yml`의 `paths-ignore: docs/**, **/*.md`). nginx 설정은 `frontend/` 이미지에 구워지므로 `nginx.conf`를 바꾼 커밋은 frontend 이미지가 새로 빌드·배포된다.
+
+### 18-7. 운영 확인 — 데이터를 만들지 않는 점검부터
+
+```bash
+H=https://sbs.alldayai.org
+curl -s $H/api/v1/live/events/ZZZZZZ/stream          # 404 + LIVE_EVENT_NOT_FOUND JSON (공개 경로 + nginx 스트림 location 통과)
+curl -s -o /dev/null -w "%{http_code}\n" $H/api/v1/live/events/ZZZZZZ   # 401 (스냅샷은 인증 필요)
+curl -sI --http2 $H/ -o /dev/null -w "%{http_version}\n"                 # 2 (HTTP/2 — 브라우저 연결 수 제한 완화)
+ssh -i ~/.ssh/ls-default-key.pem ec2-user@<서버IP> 'free -m; docker ps --format "{{.Names}} {{.Status}}"'
+```
+
+마지막으로 사람이 확인한다 — 휴대폰과 노트북에서 서로 다른 계정으로 같은 코드에 들어가 질문·좋아요·투표가 1초 안에 서로 반영되는지 본다.
+
+### 18-8. 문제가 생기면
+
+| 증상 | 먼저 볼 곳 |
+|------|-----------|
+| 이벤트가 몇 개씩 뭉쳐서 온다 | 18-2 블록이 배포된 이미지에 있는가: `docker exec board-frontend grep -c "live/events" /etc/nginx/conf.d/default.conf` |
+| 구독이 바로 끊기고 "재연결 중…" 반복 | 18-3 permitAll, 브라우저 개발자 도구 Network의 stream 응답 코드 |
+| 60초마다 끊겼다 붙는다 | `proxy_read_timeout` 누락, 또는 heartbeat(`ping`) 미전송(2일차 Step 15) |
+| 사이트 전체가 멈춤 | [[REALTIME-DEPLOY]] §5 — 메모리, `docker start mysql-8` |
+
+| 파일 / 도구 | 출처 | 역할 |
+|-------------|------|------|
+| `frontend/nginx.conf` | 기존 — Step 12에서 수정 | 스트림 전용 프록시 규칙 |
+| `SecurityConfig`, `LiveEventController` | 1일차 Step 13 | 공개 경로, 버퍼링 끄기 헤더 |
+| `docker compose build/up --no-deps` | Docker Compose | 바뀐 서비스만 재생성 |
+| `gh run watch` | GitHub CLI | CI 진행 확인 |
+| [[REALTIME-DEPLOY]] | 위키 참조 문서 | STOMP·SSE 배포 변경 전체 기록 |
 
 ---
 
