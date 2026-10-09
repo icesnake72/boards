@@ -26,7 +26,124 @@ status: 완료
 
 ---
 
-## 0. 작업 지도
+## 0. EventSource 한눈에 이해하기 — 브라우저 쪽 SSE 수신기
+
+1일차에는 서버가 SSE로 **보내는** 쪽(`SseEmitter`)을 만들었다([[LIVE-POLL-WALKTHROUGH-DAY1]] §0).
+오늘은 브라우저가 그것을 **받는** 쪽을 만든다. 그 주인공이 브라우저에 내장된 `EventSource`다. 이 절만 읽어도 Step 9·10·15의 코드가 왜 그렇게 생겼는지 이해할 수 있다.
+
+> [!IMPORTANT]
+> `EventSource`는 **SSE 전용 라디오 수신기**다. 주파수(URL)만 맞춰 켜 두면, 방송(이벤트)이 올 때마다 알려 주고, 신호가 끊기면 **스스로 다시 맞춘다**.
+
+### 0-1. 왜 필요한가 — `fetch`로 받으면 무엇이 힘든가
+
+`fetch`는 "요청 한 번, 응답 한 번"에 맞춰진 도구다. 끝나지 않는 SSE 응답을 `fetch`로 받으려면 아래를 전부 직접 짜야 한다.
+
+| 직접 해야 하는 일 | `fetch`로 하면 | `EventSource`는 |
+|-------------------|----------------|-----------------|
+| 조각나서 오는 바이트를 줄 단위로 자르기 | `ReadableStream` 읽기 + 버퍼 관리 | 알아서 |
+| `event:` / `data:` / 빈 줄 규칙대로 이벤트 조립 | 파서 작성 | 알아서 |
+| 이벤트 이름별로 나눠 전달 | 분기 코드 작성 | `addEventListener("이름")` |
+| 끊기면 다시 연결 | 타이머·재시도 직접 | **자동**(보통 약 3초 뒤) |
+| 재연결 때 "마지막으로 받은 번호" 알려 주기 | 직접 | 서버가 `id:`를 보냈다면 `Last-Event-ID` 헤더를 자동으로 붙인다 |
+
+그래서 받기는 `EventSource`, 보내기(질문·좋아요·투표)는 기존 `fetch`(`api.js`의 `jsonFetch`)로 역할을 나눈다.
+
+### 0-2. 기본 사용법 — 다섯 줄이면 된다
+
+```js
+// 1) 켠다 — 이 순간 GET 요청이 나가고 연결이 열린 채 유지된다
+const source = new EventSource("/api/v1/live/events/K7M2QX/stream");
+
+// 2) 이름 있는 이벤트를 받는다 — 서버의 "event:question.created"와 짝
+source.addEventListener("question.created", (e) => {
+  const question = JSON.parse(e.data);   // e.data는 항상 문자열 → JSON은 직접 파싱
+  console.log("새 질문", question);
+});
+
+// 3) 끊김을 알아챈다 — 브라우저는 이미 재연결을 준비 중이다
+source.onerror = () => console.log("끊김, 상태:", source.readyState);
+
+// 4) 끈다 — 화면을 떠날 때 반드시(안 끄면 연결이 계속 살아 있다)
+source.close();
+```
+
+| 받는 방법 | 무엇을 받나 | 이 강의에서 |
+|-----------|-------------|-------------|
+| `addEventListener("이름", fn)` | `event:이름`이 붙은 이벤트 | 전부 이것을 쓴다(`connected`, `question.liked`, `ping` …) |
+| `onmessage = fn` | `event:` 줄이 **없는** 이벤트만 | 쓰지 않는다 — 이름을 붙였으므로 여기로는 아무것도 안 온다 |
+| `onopen = fn` | 연결이 열린 순간 | 쓰지 않고, 서버가 보내는 `connected` 이벤트로 대신한다(아래 0-4) |
+
+> 주의: 서버가 `event:question.created`로 보냈는데 `onmessage`만 걸어 두면 **아무것도 안 온다**. 이름 있는 이벤트는 반드시 `addEventListener`로 받는다. SSE를 처음 쓸 때 가장 흔한 실수다.
+
+### 0-3. 상태와 자동 재연결 — `readyState` 세 가지
+
+```mermaid
+stateDiagram-v2
+  [*] --> CONNECTING: new EventSource(url)
+  CONNECTING --> OPEN: 200 + text/event-stream
+  OPEN --> CONNECTING: 연결 끊김 (onerror) — 잠시 뒤 자동 재시도
+  CONNECTING --> CLOSED: 200이 아닌 응답(404, 500 …) — 브라우저가 포기
+  OPEN --> CLOSED: close() 호출
+  CLOSED --> [*]
+```
+
+| `readyState` | 값 | 뜻 | 화면에 보여 줄 말 |
+|--------------|----|----|------------------|
+| `EventSource.CONNECTING` | 0 | 연결 중 또는 **재연결 대기 중** | "연결 중…" / "재연결 중…" |
+| `EventSource.OPEN` | 1 | 열려 있고 이벤트를 받을 수 있음 | "실시간 연결됨" |
+| `EventSource.CLOSED` | 2 | 끝. 더는 스스로 재연결하지 않음 | "연결 종료" |
+
+- 네트워크가 잠깐 끊기면 `onerror`가 호출되지만 상태는 `CONNECTING` — 브라우저가 **알아서** 다시 붙는다. 우리는 표시만 바꾸면 된다.
+- 서버가 404·500처럼 실패 응답을 주면 `CLOSED` — 브라우저가 **포기**한다. 다시 열려면 `new EventSource(...)`를 새로 만들어야 한다(Step 15의 watchdog이 이 일을 한다).
+- `close()`를 부르면 재연결도 멈춘다. 종료된 이벤트(`event.closed`)를 받았을 때 반드시 부르는 이유다 — 안 부르면 서버가 닫자마자 브라우저가 다시 붙는 일을 끝없이 반복한다.
+
+### 0-4. 우리 화면에서 쓰는 방식 — 세 가지 약속
+
+| 약속 | 이유 | 코드 위치 |
+|------|------|-----------|
+| 연결되면 서버가 `connected`를 먼저 보내고, 받을 때마다 스냅샷을 다시 읽는다 | 재연결 사이에 놓친 변화를 메운다(서버는 지난 이벤트를 다시 보내지 않는다) | Step 9 `liveStream.js`, Step 10 `LiveRoom` |
+| `event.closed`를 받으면 `close()` | 끝난 방에 무한 재연결 방지 | Step 9 |
+| 60초 동안 아무것도(25초 `ping` 포함) 안 오면 직접 닫고 새로 연다 | `EventSource`는 "열려 있지만 죽은" 연결을 스스로 알아채지 못한다 | Step 15 |
+
+React 화면에서는 `useEffect`가 구독의 수명을 맡는다. 화면에 들어올 때 열고, 떠날 때(정리 함수) 닫는다.
+
+```jsx
+useEffect(() => {
+  const close = openLiveStream(code, { onConnected: load, onEvent: applyEvent, onStatus: setConn });
+  return close;   // 방을 나가거나 code가 바뀌면 이전 연결을 닫는다
+}, [code, load, applyEvent]);
+```
+
+### 0-5. `EventSource`가 못 하는 것
+
+| 못 하는 것 | 결과 | 이 강의의 대응 |
+|------------|------|----------------|
+| **요청 헤더 추가** | `Authorization: Bearer`를 못 실음 | 스트림만 공개하고 개인 정보는 싣지 않는다(1일차 Step 13) |
+| GET 외의 메서드, 요청 본문 | 구독 요청에 데이터를 못 실음 | 필요한 정보는 URL 경로(`/events/{code}/stream`)에 |
+| 바이너리 수신 | `e.data`는 항상 UTF-8 문자열 | JSON 문자열로 주고받는다 |
+| 죽은 연결 감지 | 중간 프록시가 연결을 쥐고 있으면 영원히 "열림" | heartbeat 이벤트 + watchdog(Step 15) |
+
+> 팁: 같은 출처(same-origin)라면 쿠키는 자동으로 실린다. 그래서 세션 쿠키 기반 서비스는 SSE 인증이 쉽다. board는 access token을 메모리에 두고 헤더로만 보내는 구조라(단계 5) 이 길을 쓰지 않는다.
+
+### 0-6. 눈으로 보는 법 — 개발자 도구
+
+Chrome 개발자 도구 → **Network** 탭 → `stream` 요청을 클릭 → **EventStream** 탭을 열면 도착한 이벤트가 시간·이름·데이터와 함께 한 줄씩 쌓인다.
+"화면이 안 바뀐다"는 문제를 만나면 여기부터 본다. 이벤트가 쌓이는데 화면이 그대로면 프론트 병합 규칙 문제, 아무것도 안 쌓이면 서버·프록시 문제다.
+
+### 0-7. 오늘 어디서 무엇을 배우나
+
+| 개념 | 나오는 곳 |
+|------|-----------|
+| `EventSource`로 구독하는 도우미 만들기 | Step 9 |
+| 스냅샷 + 이벤트 병합으로 화면 상태 맞추기 | Step 10 |
+| 프록시가 SSE를 막는 이유와 해결 | Step 12 |
+| 실제로 써 보다 발견한 "죽은 연결" 문제 | Step 13 |
+| heartbeat 이벤트 + watchdog으로 복구 | Step 15 |
+| 스냅샷을 받는 사이에 온 이벤트 보존 | Step 16 |
+
+---
+
+## 1. 작업 지도
 
 ```mermaid
 flowchart TD
