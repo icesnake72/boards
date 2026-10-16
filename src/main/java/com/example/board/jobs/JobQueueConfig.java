@@ -63,9 +63,10 @@ public class JobQueueConfig {
   @Bean
   public ThreadPoolTaskExecutor jobRetryExecutor() {
     ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-    executor.setCorePoolSize(2);
-    executor.setMaxPoolSize(2);
-    executor.setQueueCapacity(100);
+    executor.setCorePoolSize(JobReclaimer.RETRY_THREADS);
+    executor.setMaxPoolSize(JobReclaimer.RETRY_THREADS);
+    // 재시도 담당이 빈 스레드 수만큼만 넘겨주므로 대기열은 거의 쓰이지 않는다(스레드 반납 직전의 짧은 틈만 흡수).
+    executor.setQueueCapacity(JobReclaimer.RETRY_THREADS);
     executor.setThreadNamePrefix("job-retry-");
     executor.initialize();
     return executor;

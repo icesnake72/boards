@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Semaphore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -24,6 +25,12 @@ import org.springframework.stereotype.Component;
 public class JobReclaimer {
 
   static final String RECLAIMER = "reclaimer";
+  static final int RETRY_THREADS = 2;
+
+  // 빈 실행 스레드 수. 빈 스레드가 있을 때만 넘겨받아 "넘겨받는 즉시 실행 시작"을 보장한다.
+  // 넘겨받고 줄 서서 기다리면 그동안 idle이 다시 쌓여 같은 레코드를 또 넘겨받는다(중복 실행) —
+  // "min-idle > 최대 작업 시간" 규칙은 실행이 곧바로 시작될 때만 성립한다.
+  private final Semaphore freeThreads = new Semaphore(RETRY_THREADS);
 
   private final StringRedisTemplate redis;
   private final JobProperties props;
@@ -64,14 +71,33 @@ public class JobReclaimer {
       deadLetter(entry);
       return;
     }
+    if (!freeThreads.tryAcquire()) {
+      return;                                       // 실행 스레드가 모두 바쁘다 — 다음 회차에
+    }
     // XCLAIM … min-idle — "그동안 idle이었다면" 원자적으로 내 것으로. 전달 횟수가 1 늘어난다.
     List<MapRecord<String, Object, Object>> claimed = redis.opsForStream().claim(
         props.stream(), props.group(), RECLAIMER, Duration.ofMillis(props.minIdleMs()), entry.getId());
-    for (MapRecord<String, Object, Object> record : claimed) {
-      Map<String, String> fields = toStrings(record.getValue());
-      log.info("[reclaimer] claimed job={} from={} deliveries={}",
-          fields.get("jobId"), entry.getConsumerName(), entry.getTotalDeliveryCount() + 1);
-      executor.execute(() -> worker.process(RECLAIMER, record.getId().getValue(), fields));
+    if (claimed.isEmpty()) {
+      freeThreads.release();                        // 그새 다른 쪽이 가져갔다
+      return;
+    }
+    MapRecord<String, Object, Object> record = claimed.get(0);
+    Map<String, String> fields = toStrings(record.getValue());
+    log.info("[reclaimer] claimed job={} from={} deliveries={}",
+        fields.get("jobId"), entry.getConsumerName(), entry.getTotalDeliveryCount() + 1);
+    try {
+      executor.execute(() -> {
+        try {
+          worker.process(RECLAIMER, record.getId().getValue(), fields);
+        } catch (RuntimeException e) {
+          log.warn("[reclaimer] job={} 실행 중 오류: {}", fields.get("jobId"), e.toString());
+        } finally {
+          freeThreads.release();
+        }
+      });
+    } catch (RuntimeException e) {
+      freeThreads.release();                        // 실행을 맡기지도 못했다 — PEL에 남아 다음 회차에
+      throw e;
     }
   }
 

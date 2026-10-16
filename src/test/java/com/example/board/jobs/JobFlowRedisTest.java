@@ -311,6 +311,27 @@ class JobFlowRedisTest {
     assertThat(pending()).isZero();
   }
 
+  // 실행 스레드가 모두 바쁘면 넘겨받지 않는다 — 넘겨받고 줄 서서 기다리는 동안 idle이 다시 쌓여
+  // 같은 레코드를 또 넘겨받는(중복 실행) 일을 막는다. 스레드 수(RETRY_THREADS)만큼만 넘겨받아야 한다.
+  @Test
+  void should_claimOnlyAsManyAsFreeRetryThreads() throws InterruptedException {
+    List<Runnable> queued = new java.util.ArrayList<>();
+    JobReclaimer busy = new JobReclaimer(redis, PROPS, store, worker, queued::add);   // 받기만 하고 실행 안 함
+    for (int i = 0; i < 3; i++) {
+      producer.submit(new JobSubmitRequest(1, 0));
+      readAs("worker-1");                                         // 3개 모두 받아 놓고 죽음
+    }
+    waitIdle();
+
+    busy.reclaim();
+
+    assertThat(queued).hasSize(JobReclaimer.RETRY_THREADS);
+    var owners = redis.opsForStream().pending(PROPS.stream(), PROPS.group(), Range.unbounded(), 10)
+        .stream().map(p -> p.getConsumerName()).toList();
+    assertThat(owners).containsOnly(JobReclaimer.RECLAIMER, "worker-1");
+    assertThat(owners.stream().filter("worker-1"::equals)).hasSize(1);   // 나머지 1개는 다음 기회에
+  }
+
   void deleteJobKeys() {
     Set<String> keys = redis.keys("jobs:*");
     if (keys != null && !keys.isEmpty()) {
