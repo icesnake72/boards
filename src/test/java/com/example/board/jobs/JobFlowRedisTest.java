@@ -332,6 +332,32 @@ class JobFlowRedisTest {
     assertThat(owners.stream().filter("worker-1"::equals)).hasSize(1);   // 나머지 1개는 다음 기회에
   }
 
+  // 실습 중 DEL jobs:stream 같은 조작으로 읽기 오류(NOGROUP)가 나도 작업자 구독이 죽지 않아야 한다.
+  // 기본값(cancelOnError=true)이면 오류 한 번에 구독이 영구 취소돼 이후 job이 영원히 QUEUED로 남는다.
+  @Test
+  void should_keepWorking_afterReadErrors() throws InterruptedException {
+    JobProperties fast = new JobProperties(
+        true, "jobs:stream", "job-workers", "jobs:dead", 2, 3, 200, 5000, 1, 10);
+    var container = JobQueueConfig.createContainer(factory, fast, new JobWorker(redis, fast, store));
+    container.start();
+    try {
+      Thread.sleep(300);
+      redis.delete(fast.stream());                     // 그룹째 삭제 → 다음 XREADGROUP이 NOGROUP 오류
+      Thread.sleep(2500);                              // 폴링 한 바퀴(2초) 이상 오류를 겪게 한다
+      JobQueueConfig.createGroupIfAbsent(redis, fast);
+      JobView job = producer.submit(new JobSubmitRequest(1, 0));
+
+      long deadline = System.currentTimeMillis() + 6000;
+      while (System.currentTimeMillis() < deadline
+          && store.find(job.jobId()).orElseThrow().status() != JobStatus.DONE) {
+        Thread.sleep(100);
+      }
+      assertThat(store.find(job.jobId()).orElseThrow().status()).isEqualTo(JobStatus.DONE);
+    } finally {
+      container.stop();
+    }
+  }
+
   void deleteJobKeys() {
     Set<String> keys = redis.keys("jobs:*");
     if (keys != null && !keys.isEmpty()) {

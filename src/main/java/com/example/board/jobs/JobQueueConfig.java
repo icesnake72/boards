@@ -15,6 +15,7 @@ import org.springframework.data.redis.connection.stream.StreamOffset;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.stream.StreamMessageListenerContainer;
 import org.springframework.data.redis.stream.StreamMessageListenerContainer.StreamMessageListenerContainerOptions;
+import org.springframework.data.redis.stream.StreamMessageListenerContainer.StreamReadRequest;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 // 단계 19: 그룹 생성 + 작업자 N개 구독. app.jobs.enabled=false(테스트)면 이 설정 전체가 빠진다.
@@ -45,18 +46,37 @@ public class JobQueueConfig {
             // XREADGROUP … COUNT 1 — 한 번에 하나만 가져간다. 지정하지 않으면 쌓인 job을 한 작업자가
             // 몽땅 가져가(prefetch) 자기 처리 중 목록에 넣고, 다른 작업자는 논다(E2E에서 실측).
             .batchSize(1)
-            .errorHandler(e -> log.warn("[jobs] 리스너 오류: {}", e.toString()))
+            .errorHandler(JobQueueConfig::backoffOnError)
             .build();
     StreamMessageListenerContainer<String, MapRecord<String, String, String>> container =
         StreamMessageListenerContainer.create(connectionFactory, options);
     for (int i = 1; i <= props.workers(); i++) {
       String name = "worker-" + i;
-      // receive(...) = autoAck 끔. ">"(lastConsumed)로 아직 누구도 받지 않은 새 job만 읽는다.
-      container.receive(Consumer.from(props.group(), name),
-          StreamOffset.create(props.stream(), ReadOffset.lastConsumed()),
+      // autoAcknowledge(false): ACK는 작업자가 성공했을 때 직접 한다.
+      // ReadOffset.lastConsumed() = ">" — 아직 누구도 받지 않은 새 job만 읽는다.
+      // cancelOnError(e -> false): 기본값(true)이면 읽기 오류 한 번(Redis 단절, 실습 중 DEL로 인한 NOGROUP)에
+      //   이 작업자의 구독이 영구 취소된다 — 앱은 멀쩡해 보이는데 job이 영원히 QUEUED로 남는다.
+      StreamReadRequest<String> request = StreamReadRequest
+          .builder(StreamOffset.create(props.stream(), ReadOffset.lastConsumed()))
+          .consumer(Consumer.from(props.group(), name))
+          .autoAcknowledge(false)
+          .cancelOnError(e -> false)
+          .build();
+      container.register(request,
           record -> worker.process(name, record.getId().getValue(), record.getValue()));
     }
     return container;
+  }
+
+  // 읽기 오류가 이어지면(예: 그룹이 지워진 동안) 폴링 루프가 쉬지 않고 재시도해 로그가 초당 수백 줄 쌓인다.
+  // 오류 처리기는 폴링 스레드에서 실행되므로 여기서 1초 쉬면 그 자체가 재시도 간격(backoff)이 된다.
+  private static void backoffOnError(Throwable e) {
+    log.warn("[jobs] 리스너 오류(1초 후 재시도): {}", e.toString());
+    try {
+      Thread.sleep(1000);
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+    }
   }
 
   // 재시도 담당이 넘겨받은 job을 실행할 전용 스레드(스케줄러 스레드를 막지 않게).
