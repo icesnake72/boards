@@ -11,6 +11,7 @@ import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -29,6 +30,7 @@ class JobFlowRedisTest {
   LettuceConnectionFactory factory;
   StringRedisTemplate redis;
   JobStore store;
+  JobProducer producer;
 
   @BeforeEach
   void setUp() {
@@ -41,6 +43,7 @@ class JobFlowRedisTest {
     redis = new StringRedisTemplate(factory);
     deleteJobKeys();
     store = new JobStore(redis, PROPS);
+    producer = new JobProducer(redis, PROPS, store);
   }
 
   @AfterEach
@@ -77,6 +80,19 @@ class JobFlowRedisTest {
   @Test
   void should_returnEmpty_forUnknownJob() {
     assertThat(store.find("nope")).isEmpty();
+  }
+
+  @Test
+  void should_queueJob_inStreamAndStatus() {
+    JobView view = producer.submit(new JobSubmitRequest(3, 1));
+
+    assertThat(view.status()).isEqualTo(JobStatus.QUEUED);
+    assertThat(redis.opsForStream().size("jobs:stream")).isEqualTo(1);
+    var records = redis.opsForStream().range("jobs:stream", Range.unbounded());
+    assertThat(records.get(0).getValue())
+        .containsEntry("jobId", view.jobId())
+        .containsEntry("durationSeconds", "3")
+        .containsEntry("failTimes", "1");
   }
 
   void deleteJobKeys() {
