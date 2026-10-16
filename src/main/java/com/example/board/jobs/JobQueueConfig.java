@@ -28,9 +28,23 @@ public class JobQueueConfig {
       RedisConnectionFactory connectionFactory, StringRedisTemplate redis,
       JobProperties props, JobWorker worker) {
     createGroupIfAbsent(redis, props);
+    StreamMessageListenerContainer<String, MapRecord<String, String, String>> container =
+        createContainer(connectionFactory, props, worker);
+    container.start();
+    log.info("[jobs] 리스너 시작: stream={} group={} workers={}",
+        props.stream(), props.group(), props.workers());
+    return container;
+  }
+
+  // 테스트가 같은 구성을 쓸 수 있게 분리(start는 호출하는 쪽에서).
+  static StreamMessageListenerContainer<String, MapRecord<String, String, String>> createContainer(
+      RedisConnectionFactory connectionFactory, JobProperties props, JobWorker worker) {
     StreamMessageListenerContainerOptions<String, MapRecord<String, String, String>> options =
         StreamMessageListenerContainerOptions.builder()
             .pollTimeout(Duration.ofSeconds(2))      // XREADGROUP BLOCK 2000 — 2초씩 기다리며 반복
+            // XREADGROUP … COUNT 1 — 한 번에 하나만 가져간다. 지정하지 않으면 쌓인 job을 한 작업자가
+            // 몽땅 가져가(prefetch) 자기 처리 중 목록에 넣고, 다른 작업자는 논다(E2E에서 실측).
+            .batchSize(1)
             .errorHandler(e -> log.warn("[jobs] 리스너 오류: {}", e.toString()))
             .build();
     StreamMessageListenerContainer<String, MapRecord<String, String, String>> container =
@@ -42,9 +56,6 @@ public class JobQueueConfig {
           StreamOffset.create(props.stream(), ReadOffset.lastConsumed()),
           record -> worker.process(name, record.getId().getValue(), record.getValue()));
     }
-    container.start();
-    log.info("[jobs] 리스너 시작: stream={} group={} workers={}",
-        props.stream(), props.group(), props.workers());
     return container;
   }
 

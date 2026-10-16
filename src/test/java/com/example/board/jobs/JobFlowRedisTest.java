@@ -7,6 +7,8 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.HashMap;
+import java.util.List;
+import java.util.stream.Collectors;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
@@ -250,6 +252,35 @@ class JobFlowRedisTest {
     assertThat(stats.streamLength()).isZero();
     assertThat(stats.pending()).isZero();
     assertThat(stats.consumers()).isEmpty();
+  }
+
+  // 실제 리스너 컨테이너로 분배 확인 — job을 미리 쌓아 두면, 한 번에 여러 개를 읽는 작업자가 전부 가져가 버린다(prefetch).
+  @Test
+  void should_distributeQueuedJobs_acrossWorkers() throws InterruptedException {
+    JobProperties slow = new JobProperties(
+        true, "jobs:stream", "job-workers", "jobs:dead", 2, 3, 200, 5000, 1, 100);
+    JobWorker slowWorker = new JobWorker(redis, slow, store);
+    List<String> ids = List.of(
+        producer.submit(new JobSubmitRequest(2, 0)).jobId(),
+        producer.submit(new JobSubmitRequest(2, 0)).jobId(),
+        producer.submit(new JobSubmitRequest(2, 0)).jobId(),
+        producer.submit(new JobSubmitRequest(2, 0)).jobId());
+
+    var container = JobQueueConfig.createContainer(factory, slow, slowWorker);
+    container.start();
+    try {
+      long deadline = System.currentTimeMillis() + 5000;
+      while (System.currentTimeMillis() < deadline
+          && !ids.stream().allMatch(id -> store.find(id).orElseThrow().status() == JobStatus.DONE)) {
+        Thread.sleep(50);
+      }
+    } finally {
+      container.stop();
+    }
+
+    var workers = ids.stream().map(id -> store.find(id).orElseThrow().worker()).collect(Collectors.toSet());
+    assertThat(ids).allMatch(id -> store.find(id).orElseThrow().status() == JobStatus.DONE);
+    assertThat(workers).containsExactlyInAnyOrder("worker-1", "worker-2");
   }
 
   void deleteJobKeys() {
