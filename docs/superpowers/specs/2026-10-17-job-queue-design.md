@@ -36,7 +36,7 @@ status: approved-design
 | 키 | 타입 | 내용 |
 |---|---|---|
 | `jobs:stream` | Stream | 필드 `jobId`, `durationSeconds`, `failTimes` |
-| 그룹 `job-workers` | Consumer group | `XGROUP CREATE jobs:stream job-workers $ MKSTREAM` (이미 있으면 BUSYGROUP 무시) |
+| 그룹 `job-workers` | Consumer group | `XGROUP CREATE jobs:stream job-workers 0 MKSTREAM` (이미 있으면 BUSYGROUP 무시, `0`이라 그룹 생성 전에 쌓인 job도 처리) |
 | `jobs:{jobId}` | Hash, TTL 1일 | `status`, `attempts`, `worker`, `result`, `error`, `createdAt`, `updatedAt` |
 | `jobs:dead` | Stream | 실패 보관함: `jobId`, `originalId`, `deliveries`, `error` |
 
@@ -50,7 +50,7 @@ status: approved-design
 
 | 메서드 | 경로 | 요청 → 응답 |
 |---|---|---|
-| POST | `/api/v1/jobs` | `{durationSeconds: 1~60, failTimes: 0~5}` → **202** `JobView` |
+| POST | `/api/v1/jobs` | `{durationSeconds: 1~10, failTimes: 0~5}` → **202** `JobView` (상한 10초 < min-idle 15초) |
 | GET | `/api/v1/jobs/{jobId}` | → `JobView` / 없으면 404 `JOB_NOT_FOUND` |
 | GET | `/api/v1/jobs/stats` | → `{streamLength, pending, consumers[{name, pending, idleMs}], deadLetters}` |
 
@@ -60,7 +60,7 @@ status: approved-design
 
 | 클래스 | 책임 |
 |---|---|
-| `JobProperties` | `@ConfigurationProperties("app.jobs")`: `enabled`, `stream`, `group`, `deadStream`, `workers`, `maxAttempts`, `minIdle`, `reclaimInterval` |
+| `JobProperties` | `@ConfigurationProperties("app.jobs")`: `enabled`, `stream`, `group`, `deadStream`, `workers`, `maxAttempts`, `minIdleMs`, `reclaimIntervalMs`, `statusTtlHours`, `workUnitMs` |
 | `JobStatus` | enum 5개 |
 | `JobStore` | 상태 Hash 읽기·쓰기(TTL) |
 | `JobProducer` | jobId 발급 → Hash `QUEUED` → `XADD` (생산자) |
@@ -91,3 +91,13 @@ status: approved-design
 ## 9. 범위 밖
 
 우선순위 큐, 예약 실행, 다중 서버 배포, UI, 운영 배포(강의 실습용 — 필요 시 별도 결정).
+
+## 10. 구현 중 확정된 변경 (2026-10-17)
+
+| 항목 | 내용 | 계기 |
+|---|---|---|
+| `batchSize(1)` | XREADGROUP COUNT 1 — 한 작업자가 쌓인 job을 몽땅 가져가는(prefetch) 문제 | E2E 분배 실측 |
+| `cancelOnError(e -> false)` + 1초 backoff | 읽기 오류 한 번에 구독이 영구 취소되던 기본 동작 해제, 오류 로그 폭주 방지 | 최종 리뷰 |
+| 빈 실행 스레드 세마포어 | 재시도 담당은 빈 스레드가 있을 때만 XCLAIM — 넘겨받고 대기열에서 기다리다 재차 넘겨받는 중복 실행 방지 | 최종 리뷰 |
+| 독약 레코드 처리 | 필수 필드 없는 레코드는 작업자가 즉시 `jobs:dead` + ACK, 재시도 담당은 항목별 예외 격리 | 최종 리뷰 |
+
