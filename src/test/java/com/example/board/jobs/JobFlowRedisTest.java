@@ -38,6 +38,7 @@ class JobFlowRedisTest {
   JobStore store;
   JobProducer producer;
   JobWorker worker;
+  JobReclaimer reclaimer;
 
   @BeforeEach
   void setUp() {
@@ -52,6 +53,7 @@ class JobFlowRedisTest {
     store = new JobStore(redis, PROPS);
     producer = new JobProducer(redis, PROPS, store);
     worker = new JobWorker(redis, PROPS, store);
+    reclaimer = new JobReclaimer(redis, PROPS, store, worker, Runnable::run);   // 테스트는 같은 스레드에서 즉시 실행
     JobQueueConfig.createGroupIfAbsent(redis, PROPS);
   }
 
@@ -157,6 +159,70 @@ class JobFlowRedisTest {
     JobView failed = store.find(job.jobId()).orElseThrow();
     assertThat(failed.status()).isEqualTo(JobStatus.RETRY_WAIT);
     assertThat(failed.error()).contains("의도된 실패");
+  }
+
+  void waitIdle() throws InterruptedException {
+    Thread.sleep(PROPS.minIdleMs() + 50);
+  }
+
+  @Test
+  void should_retryFailedJob_untilDone() throws InterruptedException {
+    JobView job = producer.submit(new JobSubmitRequest(1, 1));     // 1번만 실패
+    var record = readAs("worker-1");
+    worker.process("worker-1", record.getId().getValue(), fields(record));
+    waitIdle();
+
+    reclaimer.reclaim();                                            // XPENDING → XCLAIM → 재실행
+
+    JobView done = store.find(job.jobId()).orElseThrow();
+    assertThat(done.status()).isEqualTo(JobStatus.DONE);
+    assertThat(done.attempts()).isEqualTo(2);
+    assertThat(done.worker()).isEqualTo(JobReclaimer.RECLAIMER);
+    assertThat(pending()).isZero();
+  }
+
+  @Test
+  void should_notReclaim_beforeMinIdle() {
+    producer.submit(new JobSubmitRequest(1, 1));
+    var record = readAs("worker-1");
+    worker.process("worker-1", record.getId().getValue(), fields(record));
+
+    reclaimer.reclaim();                                            // 아직 min-idle 전 → 건드리지 않음
+
+    var entry = redis.opsForStream().pending(PROPS.stream(), PROPS.group(), Range.unbounded(), 10).get(0);
+    assertThat(entry.getConsumerName()).isEqualTo("worker-1");
+  }
+
+  @Test
+  void should_moveToDeadLetter_afterMaxAttempts() throws InterruptedException {
+    JobView job = producer.submit(new JobSubmitRequest(1, 5));      // 계속 실패
+    var record = readAs("worker-1");
+    worker.process("worker-1", record.getId().getValue(), fields(record));   // 전달 1회
+    waitIdle();
+    reclaimer.reclaim();                                                     // 전달 2회(실패)
+    waitIdle();
+    reclaimer.reclaim();                                                     // 전달 3회(실패)
+    waitIdle();
+
+    reclaimer.reclaim();                                                     // 3회 = 한도 → DLQ
+
+    JobView failed = store.find(job.jobId()).orElseThrow();
+    assertThat(failed.status()).isEqualTo(JobStatus.FAILED);
+    assertThat(failed.attempts()).isEqualTo(3);
+    assertThat(pending()).isZero();
+    assertThat(redis.opsForStream().size(PROPS.deadStream())).isEqualTo(1);
+  }
+
+  @Test
+  void should_reclaimAbandonedJob() throws InterruptedException {
+    JobView job = producer.submit(new JobSubmitRequest(1, 0));
+    readAs("worker-1");                     // 받아 놓고 처리 전에 "죽음" — process 호출 안 함
+    waitIdle();
+
+    reclaimer.reclaim();
+
+    assertThat(store.find(job.jobId()).orElseThrow().status()).isEqualTo(JobStatus.DONE);
+    assertThat(pending()).isZero();
   }
 
   void deleteJobKeys() {
