@@ -33,6 +33,19 @@ jwt:
   refresh-token-validity-seconds: 1209600
 
 app:
+  # 단계 19: 테스트에선 Redis 리스너를 띄우지 않는다(Redis 없이 전체 컨텍스트가 떠야 함)
+  jobs:
+    enabled: false
+    stream: jobs:stream
+    group: job-workers
+    dead-stream: jobs:dead
+    workers: 2
+    max-attempts: 3
+    min-idle-ms: 15000
+    reclaim-interval-ms: 5000
+    status-ttl-hours: 24
+    work-unit-ms: 1000
+
   # 단계 10: 테스트 업로드 루트 — OS 임시 디렉터리 하위(테스트 종료 후 자동 정리 대상). 단위 테스트는 @TempDir 우선.
   upload:
     dir: ${java.io.tmpdir}/board-test-uploads

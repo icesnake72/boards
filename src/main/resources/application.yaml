@@ -82,6 +82,21 @@ jwt:
 
 # refresh token을 담는 httpOnly 쿠키 옵션 (단계 5)
 app:
+  # 단계 19: 작업 큐(Redis Streams) — 테스트 컨텍스트는 enabled=false(리스너·재시도 담당 미생성)
+  jobs:
+    enabled: ${APP_JOBS_ENABLED:true}
+    stream: jobs:stream
+    group: job-workers
+    dead-stream: jobs:dead
+    workers: 2
+    max-attempts: 3
+    # 마지막 전달 후 이 시간 동안 ACK가 없으면 "버려진 job"으로 보고 넘겨받는다.
+    # 반드시 최대 작업 시간(10초)보다 길어야 한다 — 짧으면 실행 중인 job을 가로채 중복 실행된다.
+    min-idle-ms: 15000
+    reclaim-interval-ms: 5000
+    status-ttl-hours: 24
+    work-unit-ms: 1000
+
   # 단계 10: 업로드 파일 저장 루트. 상대경로면 앱 실행 디렉터리 기준. 운영에선 절대경로/전용 볼륨 권장.
   upload:
     dir: ${APP_UPLOAD_DIR:./uploads}
