@@ -6,12 +6,18 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.Range;
+import org.springframework.data.redis.connection.stream.Consumer;
+import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.connection.stream.ReadOffset;
+import org.springframework.data.redis.connection.stream.StreamOffset;
+import org.springframework.data.redis.connection.stream.StreamReadOptions;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -31,6 +37,7 @@ class JobFlowRedisTest {
   StringRedisTemplate redis;
   JobStore store;
   JobProducer producer;
+  JobWorker worker;
 
   @BeforeEach
   void setUp() {
@@ -44,6 +51,8 @@ class JobFlowRedisTest {
     deleteJobKeys();
     store = new JobStore(redis, PROPS);
     producer = new JobProducer(redis, PROPS, store);
+    worker = new JobWorker(redis, PROPS, store);
+    JobQueueConfig.createGroupIfAbsent(redis, PROPS);
   }
 
   @AfterEach
@@ -93,6 +102,61 @@ class JobFlowRedisTest {
         .containsEntry("jobId", view.jobId())
         .containsEntry("durationSeconds", "3")
         .containsEntry("failTimes", "1");
+  }
+
+  // XREADGROUP GROUP job-workers <consumer> COUNT 1 STREAMS jobs:stream > — 작업자가 하는 읽기를 테스트가 직접 한다
+  MapRecord<String, Object, Object> readAs(String consumer) {
+    var records = redis.opsForStream().read(
+        Consumer.from(PROPS.group(), consumer),
+        StreamReadOptions.empty().count(1),
+        StreamOffset.create(PROPS.stream(), ReadOffset.lastConsumed()));
+    return records.get(0);
+  }
+
+  static Map<String, String> fields(MapRecord<String, Object, Object> record) {
+    Map<String, String> map = new HashMap<>();
+    record.getValue().forEach((k, v) -> map.put(k.toString(), v.toString()));
+    return map;
+  }
+
+  long pending() {
+    return redis.opsForStream().pending(PROPS.stream(), PROPS.group()).getTotalPendingMessages();
+  }
+
+  @Test
+  void should_createGroupIdempotently() {
+    JobQueueConfig.createGroupIfAbsent(redis, PROPS);   // setUp에서 이미 한 번 — 두 번째도 예외 없이
+    assertThat(redis.opsForStream().groups(PROPS.stream()).size()).isEqualTo(1);
+  }
+
+  @Test
+  void should_markDone_andAck_onSuccess() {
+    JobView job = producer.submit(new JobSubmitRequest(1, 0));
+    var record = readAs("worker-1");
+    assertThat(pending()).isEqualTo(1);           // 읽었지만 아직 ACK 전 → PEL에 있다
+
+    boolean ok = worker.process("worker-1", record.getId().getValue(), fields(record));
+
+    assertThat(ok).isTrue();
+    assertThat(pending()).isZero();               // XACK로 PEL에서 빠졌다
+    JobView done = store.find(job.jobId()).orElseThrow();
+    assertThat(done.status()).isEqualTo(JobStatus.DONE);
+    assertThat(done.worker()).isEqualTo("worker-1");
+    assertThat(done.attempts()).isEqualTo(1);
+  }
+
+  @Test
+  void should_leaveInPending_onFailure() {
+    JobView job = producer.submit(new JobSubmitRequest(1, 1));
+    var record = readAs("worker-1");
+
+    boolean ok = worker.process("worker-1", record.getId().getValue(), fields(record));
+
+    assertThat(ok).isFalse();
+    assertThat(pending()).isEqualTo(1);           // ACK 안 함 → 재시도 대기
+    JobView failed = store.find(job.jobId()).orElseThrow();
+    assertThat(failed.status()).isEqualTo(JobStatus.RETRY_WAIT);
+    assertThat(failed.error()).contains("의도된 실패");
   }
 
   void deleteJobKeys() {
