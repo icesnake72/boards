@@ -21,11 +21,17 @@ public class JobController {
 
   private final JobProducer producer;
   private final JobStore store;
+  private final JobMonitor monitor;
 
   @PostMapping
   @ResponseStatus(HttpStatus.ACCEPTED)
   public JobView submit(@Valid @RequestBody JobSubmitRequest request) {
     return producer.submit(request);
+  }
+
+  @GetMapping("/stats")
+  public JobStats stats() {
+    return monitor.stats();
   }
 
   @GetMapping("/{jobId}")

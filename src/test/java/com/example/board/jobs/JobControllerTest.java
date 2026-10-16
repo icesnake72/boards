@@ -11,6 +11,7 @@ import com.example.board.auth.jwt.JwtTokenProvider;
 import com.example.board.user.Role;
 import com.example.board.user.User;
 import com.example.board.user.UserRepository;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -35,6 +36,7 @@ class JobControllerTest {
 
   @MockitoBean JobProducer producer;
   @MockitoBean JobStore store;
+  @MockitoBean JobMonitor monitor;
 
   String token;
 
@@ -95,5 +97,15 @@ class JobControllerTest {
             .contentType(MediaType.APPLICATION_JSON)
             .content("{\"durationSeconds\": 1, \"failTimes\": 0}"))
         .andExpect(status().isUnauthorized());
+  }
+
+  @Test
+  void should_returnStats() throws Exception {
+    given(monitor.stats()).willReturn(new JobStats(3, 1, List.of(), 0));
+
+    mockMvc.perform(get("/api/v1/jobs/stats").header(HttpHeaders.AUTHORIZATION, token))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.streamLength").value(3))
+        .andExpect(jsonPath("$.pending").value(1));
   }
 }

@@ -39,6 +39,7 @@ class JobFlowRedisTest {
   JobProducer producer;
   JobWorker worker;
   JobReclaimer reclaimer;
+  JobMonitor monitor;
 
   @BeforeEach
   void setUp() {
@@ -54,6 +55,7 @@ class JobFlowRedisTest {
     producer = new JobProducer(redis, PROPS, store);
     worker = new JobWorker(redis, PROPS, store);
     reclaimer = new JobReclaimer(redis, PROPS, store, worker, Runnable::run);   // 테스트는 같은 스레드에서 즉시 실행
+    monitor = new JobMonitor(redis, PROPS);
     JobQueueConfig.createGroupIfAbsent(redis, PROPS);
   }
 
@@ -223,6 +225,31 @@ class JobFlowRedisTest {
 
     assertThat(store.find(job.jobId()).orElseThrow().status()).isEqualTo(JobStatus.DONE);
     assertThat(pending()).isZero();
+  }
+
+  @Test
+  void should_reportStreamPendingConsumersAndDead() {
+    producer.submit(new JobSubmitRequest(1, 0));
+    producer.submit(new JobSubmitRequest(1, 0));
+    readAs("worker-1");                                  // 1개만 가져가고 ACK 안 함
+
+    JobStats stats = monitor.stats();
+
+    assertThat(stats.streamLength()).isEqualTo(2);
+    assertThat(stats.pending()).isEqualTo(1);
+    assertThat(stats.consumers()).extracting(JobStats.ConsumerStat::name).contains("worker-1");
+    assertThat(stats.deadLetters()).isZero();
+  }
+
+  @Test
+  void should_reportZeros_whenNothingExists() {
+    redis.delete(PROPS.stream());                         // 그룹째 사라진 상태
+
+    JobStats stats = monitor.stats();
+
+    assertThat(stats.streamLength()).isZero();
+    assertThat(stats.pending()).isZero();
+    assertThat(stats.consumers()).isEmpty();
   }
 
   void deleteJobKeys() {
