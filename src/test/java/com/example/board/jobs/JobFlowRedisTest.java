@@ -283,6 +283,34 @@ class JobFlowRedisTest {
     assertThat(workers).containsExactlyInAnyOrder("worker-1", "worker-2");
   }
 
+  // redis-cli로 직접 넣은 레코드처럼 필수 필드가 빠진 "독약(poison)" 레코드 — 작업자가 예외로 죽지 않고 보관함으로 보낸다
+  @Test
+  void should_sendMalformedRecord_toDeadLetter_withoutThrowing() {
+    redis.opsForStream().add(PROPS.stream(), Map.of("hello", "world"));
+    var record = readAs("worker-1");
+
+    boolean ok = worker.process("worker-1", record.getId().getValue(), fields(record));
+
+    assertThat(ok).isFalse();
+    assertThat(pending()).isZero();                                   // 다시 시도해도 소용없으니 ACK
+    assertThat(redis.opsForStream().size(PROPS.deadStream())).isEqualTo(1);
+  }
+
+  // 독약 레코드가 PEL에 있어도 재시도 담당은 멈추지 않고 다른 job을 계속 처리한다
+  @Test
+  void should_keepReclaiming_whenMalformedRecordIsPending() throws InterruptedException {
+    redis.opsForStream().add(PROPS.stream(), Map.of("hello", "world"));
+    readAs("worker-1");                                               // 독약을 받아 놓고 죽음
+    JobView job = producer.submit(new JobSubmitRequest(1, 0));
+    readAs("worker-1");                                               // 정상 job도 받아 놓고 죽음
+    waitIdle();
+
+    reclaimer.reclaim();
+
+    assertThat(store.find(job.jobId()).orElseThrow().status()).isEqualTo(JobStatus.DONE);
+    assertThat(pending()).isZero();
+  }
+
   void deleteJobKeys() {
     Set<String> keys = redis.keys("jobs:*");
     if (keys != null && !keys.isEmpty()) {

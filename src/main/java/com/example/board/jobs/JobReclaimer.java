@@ -50,19 +50,28 @@ public class JobReclaimer {
       if (entry.getElapsedTimeSinceLastDelivery().toMillis() < props.minIdleMs()) {
         continue;                                   // 아직 처리 중일 수 있다 — 기다린다
       }
-      if (entry.getTotalDeliveryCount() >= props.maxAttempts()) {
-        deadLetter(entry);
-        continue;
+      try {
+        reclaimOne(entry);
+      } catch (RuntimeException e) {
+        // 한 항목의 실패가 이번 회차의 나머지 항목까지 막지 않게 한다
+        log.warn("[reclaimer] record={} 처리 실패: {}", entry.getIdAsString(), e.toString());
       }
-      // XCLAIM … min-idle — "그동안 idle이었다면" 원자적으로 내 것으로. 전달 횟수가 1 늘어난다.
-      List<MapRecord<String, Object, Object>> claimed = redis.opsForStream().claim(
-          props.stream(), props.group(), RECLAIMER, Duration.ofMillis(props.minIdleMs()), entry.getId());
-      for (MapRecord<String, Object, Object> record : claimed) {
-        Map<String, String> fields = toStrings(record.getValue());
-        log.info("[reclaimer] claimed job={} from={} deliveries={}",
-            fields.get("jobId"), entry.getConsumerName(), entry.getTotalDeliveryCount() + 1);
-        executor.execute(() -> worker.process(RECLAIMER, record.getId().getValue(), fields));
-      }
+    }
+  }
+
+  private void reclaimOne(PendingMessage entry) {
+    if (entry.getTotalDeliveryCount() >= props.maxAttempts()) {
+      deadLetter(entry);
+      return;
+    }
+    // XCLAIM … min-idle — "그동안 idle이었다면" 원자적으로 내 것으로. 전달 횟수가 1 늘어난다.
+    List<MapRecord<String, Object, Object>> claimed = redis.opsForStream().claim(
+        props.stream(), props.group(), RECLAIMER, Duration.ofMillis(props.minIdleMs()), entry.getId());
+    for (MapRecord<String, Object, Object> record : claimed) {
+      Map<String, String> fields = toStrings(record.getValue());
+      log.info("[reclaimer] claimed job={} from={} deliveries={}",
+          fields.get("jobId"), entry.getConsumerName(), entry.getTotalDeliveryCount() + 1);
+      executor.execute(() -> worker.process(RECLAIMER, record.getId().getValue(), fields));
     }
   }
 
@@ -73,14 +82,17 @@ public class JobReclaimer {
         redis.opsForStream().range(props.stream(), Range.closed(recordId, recordId));
     if (!records.isEmpty()) {
       Map<String, String> fields = toStrings(records.get(0).getValue());
-      String jobId = fields.get("jobId");
-      String error = store.find(jobId).map(JobView::error).orElse("");
-      redis.opsForStream().add(props.deadStream(), Map.of(
-          "jobId", jobId,
-          "originalId", recordId,
-          "deliveries", String.valueOf(entry.getTotalDeliveryCount()),
-          "error", String.valueOf(error)));
-      store.update(jobId, JobStatus.FAILED, Map.of());
+      String jobId = fields.get("jobId");                 // redis-cli로 넣은 레코드라면 없을 수 있다
+      String error = jobId == null ? "필수 필드 누락" : store.find(jobId).map(JobView::error).orElse("");
+      Map<String, String> dead = new HashMap<>();
+      dead.put("originalId", recordId);
+      dead.put("deliveries", String.valueOf(entry.getTotalDeliveryCount()));
+      dead.put("error", error == null ? "" : error);
+      if (jobId != null) {
+        dead.put("jobId", jobId);
+        store.update(jobId, JobStatus.FAILED, Map.of());
+      }
+      redis.opsForStream().add(props.deadStream(), dead);
       log.warn("[reclaimer] dead-letter job={} deliveries={} → {}",
           jobId, entry.getTotalDeliveryCount(), props.deadStream());
     }

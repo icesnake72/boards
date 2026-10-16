@@ -18,8 +18,12 @@ public class JobWorker {
 
   public boolean process(String workerName, String recordId, Map<String, String> fields) {
     String jobId = fields.get("jobId");
-    int duration = Integer.parseInt(fields.get("durationSeconds"));
-    int failTimes = Integer.parseInt(fields.get("failTimes"));
+    Integer duration = parseOrNull(fields.get("durationSeconds"));
+    Integer failTimes = parseOrNull(fields.get("failTimes"));
+    if (jobId == null || duration == null || failTimes == null) {
+      discard(workerName, recordId, fields);
+      return false;
+    }
     long attempt = store.incrementAttempts(jobId);
     store.update(jobId, JobStatus.RUNNING, Map.of("worker", workerName));
     log.info("[{}] start job={} attempt={} record={}", workerName, jobId, attempt, recordId);
@@ -42,6 +46,25 @@ public class JobWorker {
       log.warn("[{}] fail job={} attempt={} cause={} — ACK 안 함(재시도 대기)",
           workerName, jobId, attempt, e.getMessage());
       return false;
+    }
+  }
+
+  // 형식이 잘못된 레코드(예: redis-cli로 직접 넣은 것)는 몇 번을 다시 해도 실패한다("독약" 메시지).
+  // 재시도로 시간을 버리지 않고 바로 실패 보관함에 남긴 뒤 ACK한다 — 예외를 밖으로 던지면 구독이 멈출 수 있다.
+  private void discard(String workerName, String recordId, Map<String, String> fields) {
+    redis.opsForStream().add(props.deadStream(), Map.of(
+        "originalId", recordId,
+        "error", "필수 필드 누락",
+        "fields", fields.toString()));
+    redis.opsForStream().acknowledge(props.stream(), props.group(), recordId);
+    log.warn("[{}] malformed record={} fields={} → {} (ACK)", workerName, recordId, fields, props.deadStream());
+  }
+
+  private static Integer parseOrNull(String value) {
+    try {
+      return value == null ? null : Integer.valueOf(value);
+    } catch (NumberFormatException e) {
+      return null;
     }
   }
 
