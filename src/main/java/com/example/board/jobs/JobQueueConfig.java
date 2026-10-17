@@ -59,7 +59,9 @@ public class JobQueueConfig {
     createGroupIfAbsent(redis, props);                                  // (1) 그룹 준비
     StreamMessageListenerContainer<String, MapRecord<String, String, String>> container =
         createContainer(connectionFactory, props, worker);              // (2) 작업자 N명 등록
-    container.start();                                                  // (3) 폴링 스레드 시작 — 이 순간부터 job을 꺼낸다
+    // (3) 시작: 컨테이너(관리자)가 등록해 둔 구독마다 executor에게 새 스레드를 하나씩 만들어 돌리게 한다.
+    //     start()를 부른 이 스레드는 바로 돌아오고, 새로 생긴 폴링 스레드들이 이 순간부터 job을 꺼내 처리한다.
+    container.start();
     log.info("[jobs] 리스너 시작: stream={} group={} workers={}",
         props.stream(), props.group(), props.workers());
     return container;
