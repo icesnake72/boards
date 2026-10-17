@@ -9,7 +9,7 @@ status: 완료
 # 단계 19 정답 — 작업 큐(Redis Streams)
 
 > [[JOB-QUEUE-WORKBOOK]]의 Step별 정답이다. **먼저 워크북의 "직접 작성"을 해 본 뒤** 막힐 때만 펼쳐 본다.
-> 모든 코드는 정답 브랜치 `answer/job-queue`의 최종 커밋(`ed9c6d8`)에서 그대로 생성했다(손으로 옮기지 않음).
+> 모든 코드는 정답 브랜치 `answer/job-queue`의 최종 커밋(`59f06ca`)에서 그대로 생성했다(손으로 옮기지 않음).
 > 정답 브랜치는 리뷰·E2E에서 찾은 문제(prefetch, 오류 시 구독 취소, 재시도 중복 실행, 독약 레코드)까지 고친 최종본이다.
 
 ---
@@ -332,42 +332,99 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
-// 단계 19: 작업자 — 레코드 하나를 처리한다. 성공해야만 XACK, 실패하면 ACK하지 않아 PEL에 남긴다.
+// 단계 19: JobWorker — job 하나를 "실제로 처리하는 방법"이 들어 있는 클래스.
+//
+// 한 줄 요약
+//   큐에서 꺼낸 job 한 건을 받아 일을 하고, 성공하면 "완료(ACK)" 도장을 찍는다. 실패하면 도장을 찍지 않는다.
+//
+// 식당 비유
+//   요리사들이 함께 보는 "조리법". 요리사(작업자 스레드 worker-1, worker-2, 그리고 재시도 담당)가
+//   주문표를 한 장 들고 와서 이 조리법대로 요리한다.
+//
+// 어떤 객체인가
+//   @Component라서 Spring이 앱 시작 때 딱 1개 만든다(싱글톤). worker-1 스레드도, worker-2 스레드도,
+//   재시도 스레드도 모두 이 객체 하나의 process()를 호출한다. 스레드가 아니라 "처리 방법"일 뿐이다.
+//   여러 스레드가 동시에 불러도 안전하다 — 필드는 모두 바뀌지 않는(final) 도구들이고,
+//   job마다 다른 값(jobId, 시도 횟수 등)은 전부 메서드 안의 지역 변수에만 담기 때문이다.
+//
+// 누가, 언제 부르나
+//   1) 작업자 스레드(worker-1, worker-2): Redis에서 새 job을 하나 받을 때마다          → JobQueueConfig에서 등록
+//   2) 재시도 담당(JobReclaimer): 방치된 job을 넘겨받아 다시 시킬 때(이름 "reclaimer") → JobReclaimer.reclaimOne
+//
+// 가장 중요한 규칙
+//   "성공했을 때만 ACK한다." ACK를 안 하면 job은 Redis의 처리 중 목록(PEL)에 남아 있고,
+//   나중에 재시도 담당이 그것을 찾아 다시 시킨다. 그래서 실패하거나 처리 중에 서버가 죽어도 job이 사라지지 않는다.
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class JobWorker {
 
-  private final StringRedisTemplate redis;
-  private final JobProperties props;
-  private final JobStore store;
+  private final StringRedisTemplate redis;   // Redis에 명령을 보내는 도구(ACK, 실패 보관함 기록에 사용)
+  private final JobProperties props;         // 설정값(스트림 이름, 그룹 이름 등)
+  private final JobStore store;              // job 상태판(Hash jobs:{jobId})을 읽고 쓰는 도구
 
+  // job 한 건을 처리한다.
+  //
+  // 파라미터
+  //   workerName : 누가 처리하나 — "worker-1", "worker-2", "reclaimer" (로그와 상태판에 기록용)
+  //   recordId   : Redis가 이 job에 붙인 큐 안의 번호(예: 1792172942491-0) — 완료 도장(ACK)을 찍을 때 필요
+  //   fields     : 주문표 내용 — {jobId=…, durationSeconds=3, failTimes=0}
+  //
+  // 돌려주는 값
+  //   true  = 성공해서 ACK까지 했다
+  //   false = 실패했다(ACK 안 함 → 나중에 재시도) 또는 주문표가 잘못돼서 버렸다
+  //
+  // 처리 순서
+  //   (1) 주문표 읽기 → (2) 잘못된 주문표면 버리기 → (3) "처리 중"으로 표시
+  //   → (4) 일하기 → (5) 성공이면 "완료" + ACK / 실패면 "재시도 대기"(ACK 안 함)
   public boolean process(String workerName, String recordId, Map<String, String> fields) {
+    // (1) 주문표 읽기. Redis Stream에는 모든 값이 문자열로 들어 있어서 숫자로 바꿔 쓴다.
     String jobId = fields.get("jobId");
-    Integer duration = parseOrNull(fields.get("durationSeconds"));
-    Integer failTimes = parseOrNull(fields.get("failTimes"));
+    Integer duration = parseOrNull(fields.get("durationSeconds"));   // 몇 초 동안 일할지
+    Integer failTimes = parseOrNull(fields.get("failTimes"));        // 처음 몇 번은 일부러 실패할지(데모용)
+
+    // (2) 필요한 값이 하나라도 없으면(예: redis-cli로 아무렇게나 넣은 레코드) 몇 번을 다시 해도 실패한다.
+    //     재시도로 시간을 버리지 않고 바로 실패 보관함에 넣고 끝낸다.
     if (jobId == null || duration == null || failTimes == null) {
       discard(workerName, recordId, fields);
       return false;
     }
+
+    // (3) 상태판에 "몇 번째 시도인지"를 1 올리고, 상태를 RUNNING(처리 중)으로 바꾼다.
     long attempt = store.incrementAttempts(jobId);
     store.update(jobId, JobStatus.RUNNING, Map.of("worker", workerName));
     log.info("[{}] start job={} attempt={} record={}", workerName, jobId, attempt, recordId);
+
     try {
+      // (4) 일하기. 이 데모에서는 durationSeconds초 동안 잠자는 것이 "일"이다.
+      //     실무라면 이 자리에 이미지 변환, 메일 발송, 보고서 생성 같은 진짜 작업이 들어간다.
       work(duration);
+
+      // 데모용 실패 장치: 처음 failTimes번의 시도는 일부러 실패시킨다.
+      //   예) failTimes=1 → 1번째 시도는 실패, 2번째 시도(재시도)는 성공
       if (attempt <= failTimes) {
         throw new IllegalStateException("의도된 실패 " + attempt + "/" + failTimes);
       }
+
+      // (5-성공) 상태판을 DONE(완료)으로 바꾸고, Redis에 "이 job 끝났다"는 도장(XACK)을 찍는다.
+      //          ACK하면 이 job은 처리 중 목록(PEL)에서 빠진다 — 더는 재시도 대상이 아니다.
       store.update(jobId, JobStatus.DONE, Map.of(
           "result", workerName + "가 " + duration + "초 작업 완료", "error", ""));
       redis.opsForStream().acknowledge(props.stream(), props.group(), recordId);
       log.info("[{}] done job={} → XACK", workerName, jobId);
       return true;
+
     } catch (InterruptedException e) {
+      // 앱이 꺼지는 중이라 잠자던 스레드가 깨워졌다. 일을 다 못 했으니 ACK하지 않는다.
+      //   → job은 처리 중 목록에 남고, 앱이 다시 뜨면 재시도 담당이 이어서 처리한다.
       Thread.currentThread().interrupt();
       log.warn("[{}] interrupted job={} — ACK 안 함(PEL에 남김)", workerName, jobId);
       return false;
+
     } catch (RuntimeException e) {
+      // (5-실패) 상태판을 RETRY_WAIT(재시도 대기)로 바꾸고 에러 내용을 적는다. ACK는 하지 않는다.
+      //          → 15초쯤 지나면 재시도 담당이 이 job을 찾아 다시 시킨다(최대 3번까지).
+      //          여기서 예외를 밖으로 던지지 않는 이유: 작업자 스레드의 반복 루프가 멈추지 않게 하려고.
       store.update(jobId, JobStatus.RETRY_WAIT, Map.of("error", String.valueOf(e.getMessage())));
       log.warn("[{}] fail job={} attempt={} cause={} — ACK 안 함(재시도 대기)",
           workerName, jobId, attempt, e.getMessage());
@@ -375,8 +432,10 @@ public class JobWorker {
     }
   }
 
-  // 형식이 잘못된 레코드(예: redis-cli로 직접 넣은 것)는 몇 번을 다시 해도 실패한다("독약" 메시지).
-  // 재시도로 시간을 버리지 않고 바로 실패 보관함에 남긴 뒤 ACK한다 — 예외를 밖으로 던지면 구독이 멈출 수 있다.
+  // 잘못된 주문표("독약" 메시지)를 버리는 메서드.
+  //   1) 실패 보관함(jobs:dead)에 "무엇이, 왜 버려졌는지" 기록하고
+  //   2) 원래 큐에서는 ACK해서 처리 중 목록에서 뺀다(다시 시도해 봐야 소용없으므로).
+  //   예외를 밖으로 던지지 않는다 — 던지면 작업자 스레드의 구독이 멈출 수 있다.
   private void discard(String workerName, String recordId, Map<String, String> fields) {
     redis.opsForStream().add(props.deadStream(), Map.of(
         "originalId", recordId,
@@ -386,6 +445,7 @@ public class JobWorker {
     log.warn("[{}] malformed record={} fields={} → {} (ACK)", workerName, recordId, fields, props.deadStream());
   }
 
+  // 문자열을 숫자로 바꾼다. 값이 없거나 숫자가 아니면 null(= 잘못된 주문표)을 돌려준다.
   private static Integer parseOrNull(String value) {
     try {
       return value == null ? null : Integer.valueOf(value);
@@ -394,7 +454,8 @@ public class JobWorker {
     }
   }
 
-  // "일하는 척" — 초 단위로 잠든다(테스트는 work-unit-ms를 10ms로 줄인다).
+  // "일하는 척" — units번 잠든다. 1번 = work-unit-ms(기본 1000ms = 1초).
+  //   테스트는 work-unit-ms를 10ms로 줄여서 빨리 끝나게 한다.
   private void work(int units) throws InterruptedException {
     for (int i = 0; i < units; i++) {
       Thread.sleep(props.workUnitMs());
@@ -469,7 +530,9 @@ public class JobQueueConfig {
     createGroupIfAbsent(redis, props);                                  // (1) 그룹 준비
     StreamMessageListenerContainer<String, MapRecord<String, String, String>> container =
         createContainer(connectionFactory, props, worker);              // (2) 작업자 N명 등록
-    container.start();                                                  // (3) 폴링 스레드 시작 — 이 순간부터 job을 꺼낸다
+    // (3) 시작: 컨테이너(관리자)가 등록해 둔 구독마다 executor에게 새 스레드를 하나씩 만들어 돌리게 한다.
+    //     start()를 부른 이 스레드는 바로 돌아오고, 새로 생긴 폴링 스레드들이 이 순간부터 job을 꺼내 처리한다.
+    container.start();
     log.info("[jobs] 리스너 시작: stream={} group={} workers={}",
         props.stream(), props.group(), props.workers());
     return container;
@@ -626,27 +689,59 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-// 단계 19: 재시도 담당 — ACK되지 않고 min-idle 넘게 방치된 job(실패했거나, 처리 중 작업자가 죽음)을 넘겨받는다.
-// Redis 6.2의 XAUTOCLAIM은 Spring Data Redis 3.5에 API가 없어 XPENDING(목록) + XCLAIM(넘겨받기)으로 한다.
+// 단계 19: JobReclaimer — "끝나지 않은 채 방치된 job"을 찾아 다시 시키는 재시도 담당.
+//
+// 한 줄 요약
+//   5초마다 Redis의 처리 중 목록(PEL)을 훑어보고, 15초 넘게 완료 도장(ACK)이 없는 job을
+//   넘겨받아(XCLAIM) 다시 처리시킨다. 3번이나 실패한 job은 포기하고 실패 보관함(jobs:dead)으로 옮긴다.
+//
+// 식당 비유
+//   매장을 도는 "매니저". 5초마다 주문표 걸이를 둘러보다가,
+//   요리사가 들고 갔는데 15초가 넘도록 완료 도장이 없는 주문표를 발견하면
+//     - 요리사가 실패했거나 쓰러진 것으로 보고, 그 주문표를 가져와 다른 사람에게 다시 맡긴다.
+//     - 이미 3번이나 실패한 주문표라면 "처리 불가" 보관함에 넣고 걸이에서 뗀다.
+//
+// 왜 이런 담당이 필요한가
+//   작업자(JobWorker)는 실패하면 ACK하지 않고 그냥 넘어간다. 작업자는 "새 job"만 받아 오므로
+//   실패한 job은 아무도 다시 집어 가지 않는다. 처리 중에 서버가 죽은 job도 마찬가지다.
+//   이 클래스가 없으면 그런 job은 영원히 RETRY_WAIT/RUNNING 상태로 멈춰 있게 된다.
+//
+// 어떤 객체인가
+//   @Component → Spring이 1개 만든다. 단, app.jobs.enabled=false(테스트)면 만들지 않는다.
+//   스레드가 아니다. reclaim() 메서드를 Spring 스케줄러가 5초마다 대신 불러 준다(@Scheduled).
+//
+// 관련 스레드 두 종류
+//   scheduling-1        : 5초마다 reclaim()을 실행해 "누구를 다시 시킬지" 고르는 스레드(Spring 스케줄러)
+//   job-retry-1, -2     : 골라낸 job을 실제로 다시 처리하는 스레드(JobQueueConfig.jobRetryExecutor)
+//   고르는 일과 처리하는 일을 나눈 이유: scheduling-1 스레드는 단계 18의 SSE heartbeat와 같이 쓰는데,
+//   여기서 10초짜리 job을 직접 처리하면 heartbeat가 밀린다.
 @Slf4j
 @Component
 @ConditionalOnProperty(prefix = "app.jobs", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class JobReclaimer {
 
+  // 넘겨받은 job을 처리할 때 쓰는 작업자 이름(로그와 상태판에 "reclaimer"로 찍힌다)
   static final String RECLAIMER = "reclaimer";
+
+  // 재시도용 스레드 수(job-retry-1, job-retry-2). JobQueueConfig의 스레드 풀 크기도 이 값을 쓴다.
   static final int RETRY_THREADS = 2;
 
-  // 빈 실행 스레드 수. 빈 스레드가 있을 때만 넘겨받아 "넘겨받는 즉시 실행 시작"을 보장한다.
-  // 넘겨받고 줄 서서 기다리면 그동안 idle이 다시 쌓여 같은 레코드를 또 넘겨받는다(중복 실행) —
-  // "min-idle > 최대 작업 시간" 규칙은 실행이 곧바로 시작될 때만 성립한다.
+  // "지금 비어 있는 재시도 스레드 수"를 세는 카운터(처음 2).
+  //   job을 넘겨받기 전에 하나를 빌리고(tryAcquire), 처리가 끝나면 돌려준다(release).
+  //   비어 있는 스레드가 없으면 넘겨받지 않는다.
+  // 왜 필요한가: 넘겨받아 놓고 실행 대기열에서 기다리기만 하면, 그동안 "방치 시간"이 다시 15초를 넘어
+  //   다음 회차에 같은 job을 또 넘겨받는다 → 같은 일을 두 번 하게 된다(중복 실행).
+  //   빈 스레드가 있을 때만 넘겨받으면 "넘겨받자마자 바로 처리 시작"이 보장된다.
   private final Semaphore freeThreads = new Semaphore(RETRY_THREADS);
 
-  private final StringRedisTemplate redis;
-  private final JobProperties props;
-  private final JobStore store;
-  private final JobWorker worker;
-  private final Executor executor;
+  private final StringRedisTemplate redis;   // Redis 명령 도구(XPENDING, XCLAIM, XACK 등)
+  private final JobProperties props;         // 설정값(15초, 3번 같은 기준)
+  private final JobStore store;              // job 상태판(FAILED로 바꿀 때 사용)
+  private final JobWorker worker;            // 다시 처리할 때 쓰는 "조리법" — 작업자 스레드와 같은 객체
+  private final Executor executor;           // 재시도 전용 스레드 풀(job-retry-1, -2)
 
+  // @Qualifier("jobRetryExecutor"): 스레드 풀이 여러 개 있을 수 있어서, JobQueueConfig가 만든
+  //   그 이름의 풀을 정확히 지정해 받는다. 테스트에서는 이 자리에 Runnable::run(즉시 실행)을 넣는다.
   public JobReclaimer(StringRedisTemplate redis, JobProperties props, JobStore store,
                       JobWorker worker, @Qualifier("jobRetryExecutor") Executor executor) {
     this.redis = redis;
@@ -656,44 +751,61 @@ public class JobReclaimer {
     this.executor = executor;
   }
 
+  // 5초마다 자동 실행되는 "순찰".
+  //   fixedDelay: 이전 순찰이 끝난 뒤 5초 쉬고 다음 순찰 — 순찰끼리 겹치지 않는다.
+  //   initialDelay: 앱이 뜨고 5초 뒤 첫 순찰.
   @Scheduled(fixedDelayString = "${app.jobs.reclaim-interval-ms}",
       initialDelayString = "${app.jobs.reclaim-interval-ms}")
   public void reclaim() {
-    // XPENDING jobs:stream job-workers - + 50 — 처리 중(ACK 전) 목록: 누가, 얼마나 오래, 몇 번 전달됐나
+    // 처리 중 목록(PEL)을 최대 50개 가져온다.  (redis-cli: XPENDING jobs:stream job-workers - + 50)
+    //   항목마다 "어떤 job을, 누가 들고 갔고, 몇 ms 동안 방치됐고, 몇 번 전달됐는지"가 들어 있다.
     PendingMessages pending = redis.opsForStream()
         .pending(props.stream(), props.group(), Range.unbounded(), 50);
     for (PendingMessage entry : pending) {
+      // 방치된 지 15초가 안 됐으면 아직 누가 처리 중일 수 있다 → 건드리지 않는다.
+      //   (작업 시간 상한이 10초라서, 15초 넘게 소식이 없으면 실패했거나 죽은 것으로 본다)
       if (entry.getElapsedTimeSinceLastDelivery().toMillis() < props.minIdleMs()) {
-        continue;                                   // 아직 처리 중일 수 있다 — 기다린다
+        continue;
       }
       try {
         reclaimOne(entry);
       } catch (RuntimeException e) {
-        // 한 항목의 실패가 이번 회차의 나머지 항목까지 막지 않게 한다
+        // job 하나에서 문제가 나도 나머지 job 순찰은 계속한다.
         log.warn("[reclaimer] record={} 처리 실패: {}", entry.getIdAsString(), e.toString());
       }
     }
   }
 
+  // 방치된 job 하나를 처리한다: 포기할지(3번 실패) / 다시 시킬지 결정.
   private void reclaimOne(PendingMessage entry) {
+    // 이미 3번 전달됐으면(= 3번 시도했으면) 더 시도하지 않고 실패 보관함으로 보낸다.
     if (entry.getTotalDeliveryCount() >= props.maxAttempts()) {
       deadLetter(entry);
       return;
     }
+
+    // 비어 있는 재시도 스레드가 없으면 이번에는 넘어간다(다음 순찰에서 다시 본다).
     if (!freeThreads.tryAcquire()) {
-      return;                                       // 실행 스레드가 모두 바쁘다 — 다음 회차에
+      return;
     }
-    // XCLAIM … min-idle — "그동안 idle이었다면" 원자적으로 내 것으로. 전달 횟수가 1 늘어난다.
+
+    // 넘겨받기(XCLAIM): 이 job의 주인을 worker-1 같은 원래 작업자에서 "reclaimer"로 바꾼다.
+    //   "15초 넘게 방치된 게 맞을 때만" 바꾼다 — 그사이 누가 처리했다면 아무것도 안 돌려준다.
+    //   넘겨받으면 Redis가 "전달 횟수"를 1 올린다 → 이 숫자로 몇 번째 시도인지 센다.
     List<MapRecord<String, Object, Object>> claimed = redis.opsForStream().claim(
         props.stream(), props.group(), RECLAIMER, Duration.ofMillis(props.minIdleMs()), entry.getId());
     if (claimed.isEmpty()) {
-      freeThreads.release();                        // 그새 다른 쪽이 가져갔다
+      freeThreads.release();                        // 그새 다른 쪽이 가져갔다 — 빌린 스레드 반납
       return;
     }
+
     MapRecord<String, Object, Object> record = claimed.get(0);
-    Map<String, String> fields = toStrings(record.getValue());
+    Map<String, String> fields = toStrings(record.getValue());   // 주문표 내용을 문자열 Map으로
     log.info("[reclaimer] claimed job={} from={} deliveries={}",
         fields.get("jobId"), entry.getConsumerName(), entry.getTotalDeliveryCount() + 1);
+
+    // 재시도 스레드(job-retry-N)에게 "이 job을 JobWorker로 다시 처리해"라고 맡긴다.
+    //   처리가 끝나면(성공이든 실패든) finally에서 빌린 스레드 자리를 반납한다.
     try {
       executor.execute(() -> {
         try {
@@ -705,19 +817,23 @@ public class JobReclaimer {
         }
       });
     } catch (RuntimeException e) {
-      freeThreads.release();                        // 실행을 맡기지도 못했다 — PEL에 남아 다음 회차에
+      freeThreads.release();                        // 맡기지도 못했다 — job은 PEL에 남아 다음 순찰에서 다시 시도
       throw e;
     }
   }
 
-  // 한도까지 실패 → 실패 보관함(jobs:dead)에 기록하고 원래 스트림에서는 ACK(더는 재시도하지 않음)
+  // 3번 실패한 job을 포기하는 절차.
+  //   1) 원래 주문표 내용을 읽어 실패 보관함(jobs:dead)에 "무엇이, 몇 번, 왜 실패했는지" 기록
+  //   2) 상태판을 FAILED로 변경
+  //   3) 원래 큐에서 ACK — 처리 중 목록에서 빠지므로 더는 재시도되지 않는다
   private void deadLetter(PendingMessage entry) {
     String recordId = entry.getIdAsString();
+    // PEL에는 job 내용이 없어서, 큐에서 그 번호의 레코드를 직접 읽는다(XRANGE id id).
     List<MapRecord<String, Object, Object>> records =
         redis.opsForStream().range(props.stream(), Range.closed(recordId, recordId));
     if (!records.isEmpty()) {
       Map<String, String> fields = toStrings(records.get(0).getValue());
-      String jobId = fields.get("jobId");                 // redis-cli로 넣은 레코드라면 없을 수 있다
+      String jobId = fields.get("jobId");                 // redis-cli로 넣은 엉터리 레코드라면 없을 수 있다
       String error = jobId == null ? "필수 필드 누락" : store.find(jobId).map(JobView::error).orElse("");
       Map<String, String> dead = new HashMap<>();
       dead.put("originalId", recordId);
@@ -734,6 +850,7 @@ public class JobReclaimer {
     redis.opsForStream().acknowledge(props.stream(), props.group(), recordId);
   }
 
+  // XCLAIM/XRANGE는 내용을 Map<Object, Object>로 돌려준다 → JobWorker가 받는 Map<String, String>으로 바꾼다.
   private static Map<String, String> toStrings(Map<Object, Object> value) {
     Map<String, String> map = new HashMap<>();
     value.forEach((k, v) -> map.put(String.valueOf(k), String.valueOf(v)));
@@ -755,8 +872,24 @@ package com.example.board.jobs;
 
 import java.util.List;
 
+// 단계 19: JobStats — 큐 상황판(JobMonitor)의 결과를 담는 "응답 상자". 로직은 없고 값만 담는다(record).
+//
+// GET /api/v1/jobs/stats 응답 예
+//   {"streamLength":7,"pending":0,
+//    "consumers":[{"name":"worker-1","pending":0,"idleMs":104}, …],
+//    "deadLetters":1}
+//
+// 필드 뜻
+//   streamLength : 큐에 지금까지 들어온 job 수(누적 — 완료돼도 줄지 않는다)
+//   pending      : 지금 처리 중(완료 도장 ACK 전)인 job 수 — 실제 "밀려 있는 일"의 양은 이 값으로 본다
+//   consumers    : 작업자별 현황 목록(worker-1, worker-2, reclaimer)
+//   deadLetters  : 3번 실패해서 실패 보관함(jobs:dead)으로 간 job 수
 public record JobStats(long streamLength, long pending, List<ConsumerStat> consumers, long deadLetters) {
 
+  // 작업자 한 명의 현황
+  //   name    : 작업자 이름(worker-1, worker-2, reclaimer)
+  //   pending : 이 작업자가 들고 있는(아직 ACK 안 한) job 수
+  //   idleMs  : 이 작업자가 마지막으로 활동한 뒤 지난 시간(ms) — 계속 커지면 일이 없거나 멈춘 것
   public record ConsumerStat(String name, long pending, long idleMs) {
   }
 }
@@ -774,30 +907,50 @@ import org.springframework.data.redis.connection.stream.PendingMessagesSummary;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
-// 단계 19: 큐 상태를 한눈에 — redis-cli의 XLEN / XPENDING / XINFO CONSUMERS를 API로 옮긴 것.
+// 단계 19: JobMonitor — 작업 큐가 지금 어떤 상태인지 숫자로 보여 주는 클래스.
+//
+// 한 줄 요약
+//   Redis에 몇 가지를 물어봐서(큐 길이, 처리 중 개수, 작업자별 현황, 실패 보관함 개수)
+//   JobStats 하나로 묶어 돌려준다. GET /api/v1/jobs/stats가 이 결과를 그대로 응답한다.
+//
+// 식당 비유
+//   주방 벽의 "상황판". 지금까지 들어온 주문 수, 요리 중인 주문 수,
+//   요리사별로 몇 개를 들고 있고 얼마나 쉬었는지, 처리 불가 보관함에 몇 개가 있는지를 보여 준다.
+//   상황판은 보여 주기만 하고 아무것도 바꾸지 않는다(읽기 전용).
+//
+// redis-cli로 같은 것을 보려면
+//   XLEN jobs:stream                              → streamLength
+//   XPENDING jobs:stream job-workers              → pending
+//   XINFO CONSUMERS jobs:stream job-workers       → consumers
+//   XLEN jobs:dead                                → deadLetters
 @Component
 @RequiredArgsConstructor
 public class JobMonitor {
 
-  private final StringRedisTemplate redis;
-  private final JobProperties props;
+  private final StringRedisTemplate redis;   // Redis 명령 도구
+  private final JobProperties props;         // 스트림·그룹 이름
 
   public JobStats stats() {
+    // 큐에 지금까지 들어온 job 수. 주의: 완료(ACK)돼도 레코드는 지워지지 않으므로 "누적" 개수다.
     long length = sizeOf(props.stream());
+    // 실패 보관함에 들어간 job 수
     long dead = sizeOf(props.deadStream());
     try {
+      // 처리 중(ACK 전) job 총 개수
       PendingMessagesSummary summary = redis.opsForStream().pending(props.stream(), props.group());
+      // 작업자별 현황: 이름, 들고 있는 job 수, 마지막 활동 후 지난 시간(ms)
       List<JobStats.ConsumerStat> consumers = redis.opsForStream()
           .consumers(props.stream(), props.group()).stream()
           .map(c -> new JobStats.ConsumerStat(c.consumerName(), c.pendingCount(), c.idleTimeMs()))
           .toList();
       return new JobStats(length, summary.getTotalPendingMessages(), consumers, dead);
     } catch (DataAccessException e) {
-      // 스트림·그룹이 아직 없으면(NOGROUP) 0으로 본다
+      // 아직 그룹이 없으면(앱이 처음 뜨기 전, 또는 실습 중 스트림을 지운 경우) Redis가 오류를 낸다 → 0으로 보여 준다.
       return new JobStats(length, 0, List.of(), dead);
     }
   }
 
+  // 스트림 길이(XLEN). 키가 없으면 0.
   private long sizeOf(String key) {
     Long size = redis.opsForStream().size(key);
     return size == null ? 0 : size;
@@ -1356,5 +1509,6 @@ class JobFlowRedisTest {
 | `d95b95d` | fix(jobs): 재시도 경로 중복 실행 — 빈 실행 스레드가 있을 때만 XCLAIM | 5 |
 | `f915a7b` | fix(jobs): 읽기 오류 한 번에 작업자 구독이 영구 취소되던 문제 + 오류 재시도 간격 | 4 |
 | `ed9c6d8` | docs(jobs): JobQueueConfig 역할 설명 주석 보강 (코드 무변경) | 4 (설명 보강) |
+| `59f06ca` | docs(jobs): JobWorker·JobReclaimer·JobMonitor·JobStats 쉬운 설명 주석 (코드 무변경) | 4·5·7 (설명 보강) |
 
 뒤의 `fix` 네 개가 이 실습의 진짜 교훈이다 — 모두 "테스트는 통과했는데 실제로 돌려 보거나 코드 리뷰를 받아서" 찾았고, 재현 테스트(RED)를 먼저 쓴 뒤 고쳤다.
