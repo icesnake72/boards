@@ -57,6 +57,7 @@ flowchart LR
 | 6 | (코드 없음) 작업자 다운 실험 | Step 5가 다운 복구까지 해 주는지 | `kill -9` → 재시작 → `DONE` |
 | 7 | `JobStats`, `JobMonitor`, `/stats` | 큐를 관측하는 창 | Postman `/stats` |
 | 8 | 테스트 3개 | 손으로 확인한 것을 자동화 | `./gradlew test` |
+| (마무리) | 최종 시나리오 4가지 + 부하 넣고 지켜보기 | 계속 넣으면서 분배·재시도·실패 보관함을 실시간으로 | Postman Runner, 로그, `/stats`, `redis-cli` |
 
 ---
 
@@ -306,7 +307,7 @@ docker exec jobs-redis redis-cli HGETALL jobs:<jobId>         # status QUEUED
 ```java
   public boolean process(String workerName, String recordId, Map<String, String> fields) {
     // 1) jobId·durationSeconds·failTimes 꺼내기. 하나라도 없거나 숫자가 아니면
-    //    → jobs:dead에 기록 + XACK + warn 로그 후 return false   ("독약" 레코드 — §9 문제 해결)
+    //    → jobs:dead에 기록 + XACK + warn 로그 후 return false   ("독약" 레코드 — §15 문제 해결)
     // 2) long attempt = store.incrementAttempts(jobId); store.update(jobId, RUNNING, worker=workerName)
     //    log.info("[{}] start job={} attempt={} record={}", …)
     // 3) try { 일하는 척(work) → attempt <= failTimes 면 IllegalStateException("의도된 실패 a/f")
@@ -572,7 +573,112 @@ docker exec jobs-redis redis-cli XRANGE jobs:dead - +    # jobId, originalId, de
 
 ---
 
-## 14. 문제 해결 — 실습 중 만날 수 있는 것
+## 14. 부하를 넣고 지켜보기 — 계속 넣으면서 모니터링
+
+**목표**: job을 한두 개가 아니라 **계속** 넣으면서, 작업자 2명이 나눠 처리하고 실패한 것이 재시도·실패 보관함으로 흘러가는 모습을 실시간으로 본다.
+넣는 쪽과 지켜보는 쪽을 창(터미널)으로 나눠 동시에 띄운다.
+
+### 14-1. 화면 구성
+
+| 창 | 역할 | 보는 것 |
+|----|------|---------|
+| ① 앱 로그 | `bootRun` 터미널 | 누가 언제 무엇을 처리했나(실시간) |
+| ② 큐 상황판 | `/stats` 반복 조회 | 밀린 양, 작업자별 현황, 실패 수 |
+| ③ 부하 발생 | Postman Runner 또는 curl 반복 | job을 계속 넣음 |
+| ④ (선택) Redis 직접 | `redis-cli` | 처리 중 목록 상세, 실패 보관함 내용 |
+
+### 14-2. ③ job을 계속 넣기
+
+**Postman (Collection Runner)**
+
+1. Submit job 요청의 Body를 변수로 바꾼다.
+
+   ```json
+   { "durationSeconds": {{duration}}, "failTimes": {{failTimes}} }
+   ```
+
+2. 같은 요청의 **Scripts → Pre-request**에 매번 무작위 값을 넣는 스크립트를 둔다.
+
+   ```js
+   pm.environment.set("duration", _.random(1, 5));                                // 1~5초짜리 일
+   pm.environment.set("failTimes", _.random(0, 10) < 8 ? 0 : _.random(1, 4));     // 대부분 성공, 가끔 실패
+   ```
+
+3. 컬렉션의 **Run** → Submit job만 선택 → Iterations `30`, Delay `500`ms → Run.
+
+**터미널 (curl 반복)**
+
+```bash
+H=localhost:8090
+T=$(curl -s -X POST $H/api/v1/auth/login -H 'Content-Type: application/json' \
+  -d '{"username":"<계정>","password":"<비밀번호>"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["accessToken"])')
+for i in $(seq 1 30); do
+  d=$((RANDOM % 5 + 1)); f=$(( RANDOM % 10 < 8 ? 0 : RANDOM % 4 + 1 ))
+  curl -s -o /dev/null -w "job $i: duration=$d failTimes=$f → %{http_code}\n" -X POST $H/api/v1/jobs \
+    -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
+    -d "{\"durationSeconds\":$d,\"failTimes\":$f}"
+  sleep 0.5
+done
+```
+
+### 14-3. ① 로그 — 큐 관련 줄만 골라 보기
+
+```bash
+./gradlew bootRun 2>&1 | grep -E "\[(jobs|producer|worker-|reclaimer)"
+```
+
+| 로그 | 의미 |
+|------|------|
+| `[producer] job=… queued` | 큐에 들어감 |
+| `[worker-1] start` / `done … → XACK` | 처리 시작 / 완료 |
+| `[worker-2] fail … ACK 안 함` | 실패 → 처리 중 목록(PEL)에 남음 |
+| `[reclaimer] claimed … deliveries=2` | 재시도 시작 |
+| `[reclaimer] dead-letter …` | 3번 실패 → 실패 보관함 |
+
+### 14-4. ② 상황판 — `/stats`를 2초마다
+
+macOS에는 `watch` 명령이 기본으로 없으니 반복문으로 본다(토큰 `T`는 14-2와 같은 방법으로 받는다).
+
+```bash
+while true; do
+  clear; date +%T
+  curl -s localhost:8090/api/v1/jobs/stats -H "Authorization: Bearer $T" | python3 -m json.tool
+  sleep 2
+done
+```
+
+| 값 | 보는 법 |
+|----|---------|
+| `pending` | 지금 처리 중이거나 재시도 대기 중인 양. 계속 늘기만 하면 작업자가 부족한 것 |
+| `consumers[].pending` | 작업자별로 들고 있는 수. worker-1·2에 고르게 나뉘는지 |
+| `consumers[].idleMs` | 마지막 활동 후 경과 시간. 일이 있는데 계속 커지면 작업자가 멈춘 것 |
+| `deadLetters` | 3번 실패한 수. 실패 job을 섞었다면 조금씩 늘어나야 정상 |
+| `streamLength` | 누적 개수(완료돼도 줄지 않음) — 밀린 양으로 보면 안 된다(§11 주의) |
+
+### 14-5. ④ Redis를 직접 볼 때
+
+```bash
+docker exec jobs-redis redis-cli XPENDING jobs:stream job-workers - + 10     # 처리 중 목록: 주인, 방치 ms, 전달 횟수
+docker exec jobs-redis redis-cli XINFO CONSUMERS jobs:stream job-workers     # 작업자별 현황
+docker exec jobs-redis redis-cli XRANGE jobs:dead - +                         # 실패 보관함 내용
+docker exec jobs-redis redis-cli HGETALL jobs:<jobId>                         # job 하나의 상태판
+```
+
+### 14-6. 이렇게 보면 확인되는 것
+
+| 관찰 | 의미 |
+|------|------|
+| 30개를 0.5초 간격으로 넣어도 응답은 모두 즉시 **202** | 요청(넣기)과 처리(꺼내기)가 분리되어 있다 |
+| 동시에 처리되는 것은 최대 2개, `pending`이 2 근처를 오감 | 작업자가 2명이고, 나머지는 큐에서 차례를 기다린다 |
+| 로그에 worker-1·worker-2가 번갈아 등장 | `batchSize(1)` 덕분에 고르게 나뉜다(§2-4) |
+| 실패 job이 15~20초 뒤 `[reclaimer] claimed`로 돌아옴 | 처리 중 목록 + 재시도 담당(§2-3) |
+| `failTimes` 3 이상인 job은 결국 `deadLetters` 증가 | 최대 3번 시도 후 실패 보관함 |
+
+> 팁: 작업자 수를 바꿔 비교해 보자. `application.yaml`의 `app.jobs.workers`를 `4`로 바꿔 재시작하고 같은 부하(30개)를 넣으면, 로그에 worker-3·worker-4가 등장하고 전체가 끝나는 시간이 줄어든다. 클래스를 새로 만들 필요 없이 설정 숫자 하나로 작업자가 늘어난다.
+
+---
+
+## 15. 문제 해결 — 실습 중 만날 수 있는 것
 
 | 증상 | 원인 | 해결 |
 |------|------|------|
@@ -587,7 +693,7 @@ docker exec jobs-redis redis-cli XRANGE jobs:dead - +    # jobId, originalId, de
 
 ---
 
-## 15. 정리 — 언제 무엇을 쓰나
+## 16. 정리 — 언제 무엇을 쓰나
 
 | 상황 | 선택 |
 |------|------|
